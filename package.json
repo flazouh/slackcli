@@ -1,0 +1,49 @@
+{
+  "name": "slackcli",
+  "version": "0.1.0",
+  "description": "Read and write Slack from your terminal with fast plain-text output.",
+  "keywords": [
+    "slack",
+    "cli",
+    "terminal",
+    "effect",
+    "chat"
+  ],
+  "license": "MIT",
+  "type": "module",
+  "engines": {
+    "node": ">=22"
+  },
+  "bin": {
+    "slackcli": "dist/bin/slackcli.js"
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE",
+    "CHANGELOG.md"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "check": "bun run typecheck && bun test && bun run build && node dist/bin/slackcli.js --help && npm pack --dry-run",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "bun test",
+    "start": "bun run src/bin/slackcli.ts",
+    "prepack": "bun run build",
+    "prepublishOnly": "bun run check"
+  },
+  "publishConfig": {
+    "access": "public",
+    "provenance": true
+  },
+  "packageManager": "bun@1.3.13",
+  "dependencies": {
+    "@effect/platform-node": "4.0.0-rc.109",
+    "effect": "4.0.0-rc.109"
+  },
+  "devDependencies": {
+    "@types/bun": "^1.3.0",
+    "@types/node": "^22.10.0",
+    "typescript": "^5.7.0"
+  }
+}
