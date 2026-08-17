@@ -22,14 +22,17 @@ const limit = Flag.integer("limit").pipe(
 );
 
 const json = Flag.boolean("json").pipe(
+  Flag.withDefault(false),
   Flag.withDescription("Print the result as JSON instead of formatted text")
 );
 
 const full = Flag.boolean("full").pipe(
+  Flag.withDefault(false),
   Flag.withDescription("Print long messages in full instead of clamping them")
 );
 
 const yes = Flag.boolean("yes").pipe(
+  Flag.withDefault(false),
   Flag.withAlias("y"),
   Flag.withDescription("Send without asking for confirmation")
 );
