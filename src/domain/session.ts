@@ -85,6 +85,14 @@ export const tokenCandidates = (
 /**
  * Session credentials only work with the browser cookie alongside them. An
  * OAuth token must not send one.
+ *
+ * The stored value is usually the bare `xoxd-…` string, because that is what
+ * the login prompt asks for. A cookie header needs the `d=` name in front of
+ * it, and Slack answers `invalid_auth` without it, so the name is added here
+ * unless the credential already carries it.
  */
-export const cookieHeader = (auth: SlackAuth): string | undefined =>
-  auth.kind === "session" ? Redacted.value(auth.cookie) : undefined;
+export const cookieHeader = (auth: SlackAuth): string | undefined => {
+  if (auth.kind !== "session") return undefined;
+  const value = Redacted.value(auth.cookie);
+  return value.startsWith("d=") ? value : `d=${value}`;
+};
