@@ -75,6 +75,7 @@ slackcli mentions                     # messages that mention you
 slackcli inbox                        # the whole activity feed: mentions, replies, DMs, reactions
 slackcli send project-alpha ship it   # post, after a confirmation
 slackcli reply <link> on it           # reply in a thread
+slackcli users perry                  # find a user and the <@id> syntax that pings them
 slackcli whoami                       # which account and credential is in use
 slackcli refresh                      # rebuild the cached channel list
 ```

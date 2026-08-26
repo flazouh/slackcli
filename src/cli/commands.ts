@@ -255,6 +255,40 @@ const login = Command.make(
   })
 ).pipe(Command.withDescription("Store a Slack credential after checking it works"));
 
+/**
+ * A literal `@name` in an API-posted message renders as plain text; only the
+ * raw `<@ID>` syntax pings. This command is how a sender finds that id.
+ */
+const users = Command.make(
+  "users",
+  {
+    query: Argument.string("query").pipe(
+      Argument.variadic({ min: 0 }),
+      Argument.withDescription("Name fragment to match; empty lists everyone")
+    ),
+    limit,
+    json,
+  },
+  Effect.fn("users")(function* (config) {
+    const slack = yield* Slack;
+    const view = yield* slack.users(config.query.join(" "), config.limit);
+    yield* show(view, config.json, () =>
+      view.rows.length === 0
+        ? "No matching users"
+        : view.rows
+            .map((row) =>
+              [
+                row.mention,
+                `@${row.handle}`,
+                ...(row.realName === undefined ? [] : [row.realName]),
+                ...(row.bot ? ["[bot]"] : []),
+              ].join("  ")
+            )
+            .join("\n")
+    );
+  })
+).pipe(Command.withDescription("Find workspace users and the <@id> syntax that mentions them"));
+
 const whoami = Command.make(
   "whoami",
   { json },
@@ -281,6 +315,7 @@ export const slackcli = Command.make("slackcli", {}).pipe(
     inbox,
     send,
     reply,
+    users,
     login,
     whoami,
     refresh,

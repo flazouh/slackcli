@@ -214,6 +214,52 @@ test("send resolves a channel and returns a reusable message link", async () => 
   });
 });
 
+test("users matches any profile name field, skips deleted users, and emits mention syntax", async () => {
+  const api = stubApi({
+    "users.list": [
+      {
+        ok: true,
+        members: [
+          { id: "U1", name: "perry", is_bot: true, profile: { real_name: "Perry" } },
+          { id: "U2", name: "gone", deleted: true, profile: { real_name: "Perry Gone" } },
+          { id: "U3", name: "alex", profile: { display_name: "perry-fan" } },
+          { id: "U4", name: "unrelated", profile: { real_name: "Someone Else" } },
+        ],
+      },
+    ],
+  });
+
+  const view = await run((slack) => slack.users("perry", 20), api);
+
+  expect(view.rows).toEqual([
+    { id: "U1", mention: "<@U1>", handle: "perry", realName: "Perry", bot: true },
+    { id: "U3", mention: "<@U3>", handle: "alex", realName: undefined, bot: false },
+  ]);
+  expect(api.calls).toEqual(["users.list"]);
+});
+
+test("users stops paging once the limit is satisfied", async () => {
+  const api = stubApi({
+    "users.list": [
+      {
+        ok: true,
+        members: [{ id: "U1", name: "perry one" }],
+        response_metadata: { next_cursor: "page2" },
+      },
+      {
+        ok: true,
+        members: [{ id: "U2", name: "perry two" }],
+        response_metadata: { next_cursor: "page3" },
+      },
+    ],
+  });
+
+  const view = await run((slack) => slack.users("perry", 1), api);
+
+  expect(view.rows.map((row) => row.id)).toEqual(["U1"]);
+  expect(api.calls).toEqual(["users.list"]);
+});
+
 test("reply sends the root timestamp as thread_ts", async () => {
   const api = stubApi({
     "chat.postMessage": [

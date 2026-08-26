@@ -11,8 +11,9 @@ import {
   HistoryPayload,
   PostMessagePayload,
   SearchPayload,
+  UsersListPayload,
 } from "../domain/slack-schema.ts";
-import type { SlackMessage } from "../domain/slack-schema.ts";
+import type { SlackMessage, SlackUser } from "../domain/slack-schema.ts";
 import {
   activityPeopleIds,
   activityTargets,
@@ -57,6 +58,19 @@ export interface PostedView {
   readonly url: string;
 }
 
+export interface UserRow {
+  readonly id: string;
+  /** The raw syntax that pings this user when pasted into a message. */
+  readonly mention: string;
+  readonly handle: string;
+  readonly realName: string | undefined;
+  readonly bot: boolean;
+}
+
+export interface UsersView {
+  readonly rows: ReadonlyArray<UserRow>;
+}
+
 export interface IdentityView {
   readonly user: string;
   readonly userId: string;
@@ -97,6 +111,14 @@ const feedParams = (limit: number, types: ReadonlyArray<string>) => ({
 
 const HYDRATE_CONCURRENCY = 8;
 
+/**
+ * `users.list` has no server-side name filter, so pages are scanned locally.
+ * The cap keeps an enterprise workspace from turning one lookup into an
+ * unbounded crawl; five thousand members covers the workspaces this CLI meets.
+ */
+const USERS_PAGE = 1000;
+const USERS_MAX_PAGES = 5;
+
 /** One page that covers a typical thread, so the cut happens locally. */
 const THREAD_PAGE = 200;
 
@@ -127,6 +149,10 @@ export class Slack extends Context.Service<
       target: ThreadTarget,
       text: string
     ) => Effect.Effect<PostedView, SlackCallError>;
+    readonly users: (
+      query: string,
+      limit: number
+    ) => Effect.Effect<UsersView, SlackCallError>;
     readonly whoami: Effect.Effect<IdentityView, SlackCallError>;
   }
 >()("slackcli/Slack") {
@@ -360,6 +386,51 @@ export class Slack extends Context.Service<
         } satisfies PostedView;
       });
 
+      const listUsers = Effect.fn("Slack.users")(function* (query: string, limit: number) {
+        const wanted = query.toLowerCase();
+        const matches = (user: SlackUser): boolean => {
+          if (user.deleted === true) return false;
+          if (wanted.length === 0) return true;
+          return [
+            user.name,
+            user.real_name,
+            user.profile?.display_name,
+            user.profile?.real_name,
+          ].some((field) => field !== undefined && field.toLowerCase().includes(wanted));
+        };
+
+        const page = (
+          cursor: string | undefined,
+          found: ReadonlyArray<SlackUser>,
+          remaining: number
+        ): Effect.Effect<ReadonlyArray<SlackUser>, SlackCallError> =>
+          api
+            .call(slackCall("users.list", { limit: USERS_PAGE, cursor }, UsersListPayload))
+            .pipe(
+              Effect.flatMap((payload) => {
+                const collected = [...found, ...payload.members.filter(matches)];
+                const next = payload.response_metadata?.next_cursor;
+                const more =
+                  next !== undefined &&
+                  next.length > 0 &&
+                  remaining > 1 &&
+                  collected.length < limit;
+                return more ? page(next, collected, remaining - 1) : Effect.succeed(collected);
+              })
+            );
+
+        const found = yield* page(undefined, [], USERS_MAX_PAGES);
+        return {
+          rows: found.slice(0, limit).map((user) => ({
+            id: user.id,
+            mention: `<@${user.id}>`,
+            handle: user.name ?? user.id,
+            realName: user.profile?.real_name ?? user.real_name,
+            bot: user.is_bot ?? false,
+          })),
+        } satisfies UsersView;
+      });
+
       const whoami = Effect.fn("Slack.whoami")(function* () {
         const session = yield* api.session;
         const identity = yield* api.call(slackCall("auth.test", {}, AuthTestPayload));
@@ -379,6 +450,7 @@ export class Slack extends Context.Service<
         search,
         thread,
         activity,
+        users: listUsers,
         whoami,
         send: (reference: string, text: string) =>
           channels.resolve(reference).pipe(Effect.flatMap((channel) => post(channel, text))),

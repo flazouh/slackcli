@@ -94,6 +94,7 @@ export const SlackUser = Schema.Struct({
   name: Schema.optionalKey(Schema.String),
   real_name: Schema.optionalKey(Schema.String),
   is_bot: Schema.optionalKey(Schema.Boolean),
+  deleted: Schema.optionalKey(Schema.Boolean),
   profile: Schema.optionalKey(Profile),
 }).annotate({ identifier: "SlackUser" });
 export type SlackUser = typeof SlackUser.Type;
@@ -171,6 +172,13 @@ export const ConversationListPayload = Schema.Struct({
 });
 
 export const UserInfoPayload = Schema.Struct({ user: SlackUser });
+
+export const UsersListPayload = Schema.Struct({
+  members: Schema.Array(SlackUser),
+  response_metadata: Schema.optionalKey(
+    Schema.Struct({ next_cursor: Schema.optionalKey(Schema.String) })
+  ),
+});
 
 export const AuthTestPayload = Schema.Struct({
   user_id: Schema.String,
