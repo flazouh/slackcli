@@ -25,7 +25,7 @@ import {
 } from "../domain/rows.ts";
 import type { ActivityTarget, MentionRow, MessageRow, SearchRow } from "../domain/rows.ts";
 import { permalink } from "../domain/thread-target.ts";
-import type { ThreadTarget } from "../domain/thread-target.ts";
+import type { MessageTarget, ThreadTarget } from "../domain/thread-target.ts";
 import { ChannelDirectory } from "./channel-directory.ts";
 import { SlackApi, slackCall } from "./slack-api.ts";
 import { UserDirectory } from "./user-directory.ts";
@@ -147,6 +147,10 @@ export class Slack extends Context.Service<
     ) => Effect.Effect<PostedView, ReadError>;
     readonly reply: (
       target: ThreadTarget,
+      text: string
+    ) => Effect.Effect<PostedView, SlackCallError>;
+    readonly edit: (
+      target: MessageTarget,
       text: string
     ) => Effect.Effect<PostedView, SlackCallError>;
     readonly users: (
@@ -386,6 +390,24 @@ export class Slack extends Context.Service<
         } satisfies PostedView;
       });
 
+      const edit = Effect.fn("Slack.edit")(function* (target: MessageTarget, text: string) {
+        const edited = yield* api.call(
+          slackCall(
+            "chat.update",
+            { channel: target.channel, ts: target.ts, text },
+            PostMessagePayload
+          )
+        );
+
+        const workspace = yield* api.workspaceRef;
+        const channelNames = yield* channels.names;
+        return {
+          channel: channelLabel(edited.channel, channelNames),
+          ts: edited.ts,
+          url: permalink(workspace, edited.channel, edited.ts),
+        } satisfies PostedView;
+      });
+
       const listUsers = Effect.fn("Slack.users")(function* (query: string, limit: number) {
         const wanted = query.toLowerCase();
         const matches = (user: SlackUser): boolean => {
@@ -456,6 +478,7 @@ export class Slack extends Context.Service<
           channels.resolve(reference).pipe(Effect.flatMap((channel) => post(channel, text))),
         reply: (target: ThreadTarget, text: string) =>
           post(target.channel, text, target.threadTs),
+        edit,
       };
     })
   );

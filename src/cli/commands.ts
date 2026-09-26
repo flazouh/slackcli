@@ -3,7 +3,7 @@ import { Argument, Command, Flag, Prompt } from "effect/unstable/cli";
 import { FetchHttpClient } from "effect/unstable/http";
 
 import { WriteNotConfirmed } from "../domain/errors.ts";
-import { parseThreadTarget } from "../domain/thread-target.ts";
+import { parseMessageTarget, parseThreadTarget } from "../domain/thread-target.ts";
 import { ChannelDirectory } from "../services/channel-directory.ts";
 import { writeSession } from "../services/credentials.ts";
 import { Slack } from "../services/slack.ts";
@@ -202,6 +202,33 @@ const reply = Command.make(
   })
 ).pipe(Command.withDescription("Reply inside a thread"));
 
+const edit = Command.make(
+  "edit",
+  {
+    target: Argument.string("target").pipe(
+      Argument.withDescription("A link to your own message, or channel:timestamp")
+    ),
+    text: textArgument,
+    yes,
+    json,
+  },
+  Effect.fn("edit")(function* (config) {
+    const slack = yield* Slack;
+    const target = yield* Effect.fromResult(parseMessageTarget(config.target));
+    const text = config.text.join(" ");
+
+    yield* confirmWrite({
+      action: "edit",
+      target: `${target.channel} message ${target.ts}`,
+      text,
+      approved: config.yes,
+    });
+
+    const edited = yield* slack.edit(target, text);
+    yield* show(edited, config.json, () => `Edited in ${edited.channel}\n${edited.url}`);
+  })
+).pipe(Command.withDescription("Replace the text of one of your own messages"));
+
 const refresh = Command.make(
   "refresh",
   {},
@@ -315,6 +342,7 @@ export const slackcli = Command.make("slackcli", {}).pipe(
     inbox,
     send,
     reply,
+    edit,
     users,
     login,
     whoami,

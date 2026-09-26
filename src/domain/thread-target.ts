@@ -64,6 +64,31 @@ export const parseThreadTarget = (
   return Result.fail(new ThreadTargetInvalid({ value }));
 };
 
+export interface MessageTarget {
+  readonly channel: ChannelId;
+  readonly ts: MessageTs;
+}
+
+/**
+ * Editing needs the linked message itself. A reply's link also carries its
+ * thread root, which is what a reply wants and exactly what an edit must not use.
+ */
+export const parseMessageTarget = (
+  value: string
+): Result.Result<MessageTarget, ThreadTargetInvalid> => {
+  const archives = PERMALINK.exec(value);
+  if (archives?.[1] && archives[2] && archives[3]) {
+    return Result.succeed({
+      channel: ChannelId.make(archives[1]),
+      ts: MessageTs.make(`${archives[2]}.${archives[3]}`),
+    });
+  }
+  return Result.map(parseThreadTarget(value), (thread) => ({
+    channel: thread.channel,
+    ts: thread.threadTs,
+  }));
+};
+
 /**
  * Slack permalinks encode the timestamp with the dot removed. A link to a reply
  * carries the thread root the way Slack's own "Copy link" does, so pasting the
