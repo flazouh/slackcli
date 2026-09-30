@@ -31,6 +31,13 @@ const full = Flag.boolean("full").pipe(
   Flag.withDescription("Print long messages in full instead of clamping them")
 );
 
+const unanswered = Flag.boolean("unanswered").pipe(
+  Flag.withDefault(false),
+  Flag.withDescription(
+    "Keep only items you have not posted after in their thread (one thread read per item)"
+  )
+);
+
 const yes = Flag.boolean("yes").pipe(
   Flag.withDefault(false),
   Flag.withAlias("y"),
@@ -140,10 +147,12 @@ const thread = Command.make(
 const activityCommand = (name: string, scope: "mentions" | "all", description: string) =>
   Command.make(
     name,
-    { limit, json, full },
+    { limit, json, full, unanswered },
     Effect.fn(name)(function* (config) {
       const slack = yield* Slack;
-      const view = yield* slack.activity(config.limit, scope);
+      const view = yield* slack.activity(config.limit, scope, {
+        unansweredOnly: config.unanswered,
+      });
       yield* show(view, config.json, () => renderMentions(view.rows, layout(config)));
     })
   ).pipe(Command.withDescription(description));
