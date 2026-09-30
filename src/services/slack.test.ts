@@ -134,6 +134,69 @@ test("activity hydrates a thread reply and resolves its author", async () => {
   expect(api.calls).toEqual(["activity.feed", "conversations.replies", "users.info"]);
 });
 
+test("activity keeps only the mentions Alex has not replied to after, in their thread", async () => {
+  const mention = (ts: string, threadTs: string | undefined) => ({
+    is_unread: false,
+    item: {
+      type: "at_user",
+      message: {
+        channel: "C1",
+        ts,
+        ...(threadTs === undefined ? {} : { thread_ts: threadTs }),
+        author_user_id: "U2",
+        text: `ping at ${ts}`,
+      },
+    },
+  });
+  const api = stubApi({
+    "activity.feed": [
+      {
+        ok: true,
+        items: [
+          mention("1790000100.000000", "1790000000.000000"),
+          mention("1790000200.000000", "1790000000.000000"),
+          mention("1790000300.000000", undefined),
+        ],
+      },
+    ],
+    "auth.test": [{ ok: true, user_id: "UME", user: "me", team_id: "T1", team: "Team" }],
+    "conversations.replies": [
+      {
+        ok: true,
+        messages: [
+          { ts: "1790000100.000000", user: "U2", text: "ping" },
+          { ts: "1790000150.000000", user: "UME", text: "answered" },
+        ],
+      },
+      {
+        ok: true,
+        messages: [{ ts: "1790000200.000000", user: "U2", text: "ping" }],
+      },
+      {
+        ok: true,
+        messages: [{ ts: "1790000300.000000", user: "U2", text: "ping" }],
+      },
+    ],
+    "users.info": [{ ok: true, user: { id: "U2", real_name: "Lab" } }],
+  });
+
+  const view = await run(
+    (slack) => slack.activity(20, "mentions", { unansweredOnly: true }),
+    api
+  );
+
+  expect(view.rows.map((row) => row.message)).toEqual([
+    "ping at 1790000200.000000",
+    "ping at 1790000300.000000",
+  ]);
+  const threadReads = api.requests.filter((request) => request.method === "conversations.replies");
+  expect(threadReads.map((request) => [request.params.ts, request.params.oldest])).toEqual([
+    ["1790000000.000000", "1790000100.000000"],
+    ["1790000000.000000", "1790000200.000000"],
+    ["1790000300.000000", "1790000300.000000"],
+  ]);
+});
+
 test("search uses the users returned with the result without another call", async () => {
   const api = stubApi({
     "search.messages": [

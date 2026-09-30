@@ -72,6 +72,7 @@ slackcli read project-alpha -n 20     # latest messages in a channel
 slackcli thread <link> -n 10          # the newest replies in a thread
 slackcli search deploy failed -n 20   # search the workspace
 slackcli mentions                     # messages that mention you
+slackcli mentions --unanswered        # only those you have not replied to in their thread
 slackcli inbox                        # the whole activity feed: mentions, replies, DMs, reactions
 slackcli send project-alpha ship it   # post, after a confirmation
 slackcli reply <link> on it           # reply in a thread

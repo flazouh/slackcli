@@ -25,7 +25,7 @@ import {
 } from "../domain/rows.ts";
 import type { ActivityTarget, MentionRow, MessageRow, SearchRow } from "../domain/rows.ts";
 import { permalink } from "../domain/thread-target.ts";
-import type { ThreadTarget } from "../domain/thread-target.ts";
+import type { MessageTarget, ThreadTarget } from "../domain/thread-target.ts";
 import { ChannelDirectory } from "./channel-directory.ts";
 import { SlackApi, slackCall } from "./slack-api.ts";
 import { UserDirectory } from "./user-directory.ts";
@@ -111,6 +111,14 @@ const feedParams = (limit: number, types: ReadonlyArray<string>) => ({
 
 const HYDRATE_CONCURRENCY = 8;
 
+/** How many replies after a mention are read to find one of the user's own. */
+const REPLIES_AFTER_MENTION = 200;
+
+export interface ActivityOptions {
+  /** Keep only items the signed-in user has not posted after, in their thread. */
+  readonly unansweredOnly?: boolean;
+}
+
 /**
  * `users.list` has no server-side name filter, so pages are scanned locally.
  * The cap keeps an enterprise workspace from turning one lookup into an
@@ -139,7 +147,8 @@ export class Slack extends Context.Service<
     ) => Effect.Effect<ThreadView, SlackCallError>;
     readonly activity: (
       limit: number,
-      scope: "mentions" | "all"
+      scope: "mentions" | "all",
+      options?: ActivityOptions
     ) => Effect.Effect<ActivityView, SlackCallError>;
     readonly send: (
       reference: string,
@@ -147,6 +156,10 @@ export class Slack extends Context.Service<
     ) => Effect.Effect<PostedView, ReadError>;
     readonly reply: (
       target: ThreadTarget,
+      text: string
+    ) => Effect.Effect<PostedView, SlackCallError>;
+    readonly edit: (
+      target: MessageTarget,
       text: string
     ) => Effect.Effect<PostedView, SlackCallError>;
     readonly users: (
@@ -330,9 +343,39 @@ export class Slack extends Context.Service<
           } satisfies ActivityTarget;
         });
 
+      /**
+       * A mention counts as answered when the user posted in its thread after it.
+       * A top-level mention is its own thread root, so a reply under it counts
+       * too. A thread the token cannot read keeps the mention, so nothing that
+       * still needs an answer is hidden.
+       */
+      const repliedAfter = (target: ActivityTarget, userId: string) =>
+        api
+          .call(
+            slackCall(
+              "conversations.replies",
+              {
+                channel: target.channel,
+                ts: target.threadTs ?? target.ts,
+                oldest: target.ts,
+                limit: REPLIES_AFTER_MENTION,
+              },
+              HistoryPayload
+            )
+          )
+          .pipe(
+            Effect.map((payload) =>
+              payload.messages.some(
+                (message) => message.user === userId && Number(message.ts) > Number(target.ts)
+              )
+            ),
+            Effect.catch(() => Effect.succeed(false))
+          );
+
       const activity = Effect.fn("Slack.activity")(function* (
         limit: number,
-        scope: "mentions" | "all"
+        scope: "mentions" | "all",
+        options: ActivityOptions = {}
       ) {
         const feed = yield* api.call(
           slackCall(
@@ -342,9 +385,20 @@ export class Slack extends Context.Service<
           )
         );
 
-        const targets = yield* Effect.forEach(activityTargets(feed.items), hydrate, {
+        const hydrated = yield* Effect.forEach(activityTargets(feed.items), hydrate, {
           concurrency: HYDRATE_CONCURRENCY,
         });
+        const targets = options.unansweredOnly
+          ? yield* Effect.gen(function* () {
+              const identity = yield* api.call(slackCall("auth.test", {}, AuthTestPayload));
+              const answered = yield* Effect.forEach(
+                hydrated,
+                (target) => repliedAfter(target, identity.user_id),
+                { concurrency: HYDRATE_CONCURRENCY }
+              );
+              return hydrated.filter((_, index) => !answered[index]);
+            })
+          : hydrated;
 
         const people = yield* users.names(targets.flatMap(activityPeopleIds));
         const channelNames = yield* channels.names;
@@ -383,6 +437,24 @@ export class Slack extends Context.Service<
           channel: channelLabel(posted.channel, channelNames),
           ts: posted.ts,
           url: permalink(workspace, posted.channel, posted.ts),
+        } satisfies PostedView;
+      });
+
+      const edit = Effect.fn("Slack.edit")(function* (target: MessageTarget, text: string) {
+        const edited = yield* api.call(
+          slackCall(
+            "chat.update",
+            { channel: target.channel, ts: target.ts, text },
+            PostMessagePayload
+          )
+        );
+
+        const workspace = yield* api.workspaceRef;
+        const channelNames = yield* channels.names;
+        return {
+          channel: channelLabel(edited.channel, channelNames),
+          ts: edited.ts,
+          url: permalink(workspace, edited.channel, edited.ts),
         } satisfies PostedView;
       });
 
@@ -456,6 +528,7 @@ export class Slack extends Context.Service<
           channels.resolve(reference).pipe(Effect.flatMap((channel) => post(channel, text))),
         reply: (target: ThreadTarget, text: string) =>
           post(target.channel, text, target.threadTs),
+        edit,
       };
     })
   );

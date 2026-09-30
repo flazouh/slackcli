@@ -3,7 +3,7 @@ import { Argument, Command, Flag, Prompt } from "effect/unstable/cli";
 import { FetchHttpClient } from "effect/unstable/http";
 
 import { WriteNotConfirmed } from "../domain/errors.ts";
-import { parseThreadTarget } from "../domain/thread-target.ts";
+import { parseMessageTarget, parseThreadTarget } from "../domain/thread-target.ts";
 import { ChannelDirectory } from "../services/channel-directory.ts";
 import { writeSession } from "../services/credentials.ts";
 import { Slack } from "../services/slack.ts";
@@ -29,6 +29,13 @@ const json = Flag.boolean("json").pipe(
 const full = Flag.boolean("full").pipe(
   Flag.withDefault(false),
   Flag.withDescription("Print long messages in full instead of clamping them")
+);
+
+const unanswered = Flag.boolean("unanswered").pipe(
+  Flag.withDefault(false),
+  Flag.withDescription(
+    "Keep only items you have not posted after in their thread (one thread read per item)"
+  )
 );
 
 const yes = Flag.boolean("yes").pipe(
@@ -140,10 +147,12 @@ const thread = Command.make(
 const activityCommand = (name: string, scope: "mentions" | "all", description: string) =>
   Command.make(
     name,
-    { limit, json, full },
+    { limit, json, full, unanswered },
     Effect.fn(name)(function* (config) {
       const slack = yield* Slack;
-      const view = yield* slack.activity(config.limit, scope);
+      const view = yield* slack.activity(config.limit, scope, {
+        unansweredOnly: config.unanswered,
+      });
       yield* show(view, config.json, () => renderMentions(view.rows, layout(config)));
     })
   ).pipe(Command.withDescription(description));
@@ -201,6 +210,33 @@ const reply = Command.make(
     yield* show(posted, config.json, () => `Replied in ${posted.channel}\n${posted.url}`);
   })
 ).pipe(Command.withDescription("Reply inside a thread"));
+
+const edit = Command.make(
+  "edit",
+  {
+    target: Argument.string("target").pipe(
+      Argument.withDescription("A link to your own message, or channel:timestamp")
+    ),
+    text: textArgument,
+    yes,
+    json,
+  },
+  Effect.fn("edit")(function* (config) {
+    const slack = yield* Slack;
+    const target = yield* Effect.fromResult(parseMessageTarget(config.target));
+    const text = config.text.join(" ");
+
+    yield* confirmWrite({
+      action: "edit",
+      target: `${target.channel} message ${target.ts}`,
+      text,
+      approved: config.yes,
+    });
+
+    const edited = yield* slack.edit(target, text);
+    yield* show(edited, config.json, () => `Edited in ${edited.channel}\n${edited.url}`);
+  })
+).pipe(Command.withDescription("Replace the text of one of your own messages"));
 
 const refresh = Command.make(
   "refresh",
@@ -315,6 +351,7 @@ export const slackcli = Command.make("slackcli", {}).pipe(
     inbox,
     send,
     reply,
+    edit,
     users,
     login,
     whoami,

@@ -1,7 +1,7 @@
 import { expect, test } from "bun:test";
 import { Result } from "effect";
 
-import { parseThreadTarget, permalink } from "./thread-target.ts";
+import { parseMessageTarget, parseThreadTarget, permalink } from "./thread-target.ts";
 
 /** Compares the addresses as plain strings, since the domain type is branded. */
 const parsed = (value: string): { channel: string; threadTs: string } => {
@@ -69,4 +69,26 @@ test("a permalink this tool prints can be pasted back into it", () => {
   const url = permalink("T00000001", "C00000001", "1700000004.000004");
 
   expect(parsed(url)).toEqual({ channel: "C00000001", threadTs: "1700000004.000004" });
+});
+
+test("an edit target keeps the linked reply, not the thread root", () => {
+  const target = Result.getOrThrow(
+    parseMessageTarget(
+      "https://workspace.invalid/archives/C00000001/p1700000001000001?thread_ts=1700000000.000001&cid=C00000001"
+    )
+  );
+  expect({ channel: String(target.channel), ts: String(target.ts) }).toEqual({
+    channel: "C00000001",
+    ts: "1700000001.000001",
+  });
+});
+
+test("an edit target accepts the in-app link this tool prints", () => {
+  const target = Result.getOrThrow(
+    parseMessageTarget("https://app.slack.com/client/E00000001/C00000002/p1700000004000004")
+  );
+  expect({ channel: String(target.channel), ts: String(target.ts) }).toEqual({
+    channel: "C00000002",
+    ts: "1700000004.000004",
+  });
 });
