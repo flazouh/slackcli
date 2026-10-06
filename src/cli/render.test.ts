@@ -15,6 +15,7 @@ const row = (message: string): MessageRow => ({
   at: "2026-08-17T11:59:00.000Z",
   url: "https://example.com/message",
   replies: undefined,
+  files: [],
 });
 
 test("a character-clamped message ends with one ellipsis", () => {

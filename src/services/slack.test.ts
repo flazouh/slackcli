@@ -339,3 +339,70 @@ test("reply sends the root timestamp as thread_ts", async () => {
   });
   expect(api.requests[0]?.params["client_msg_id"]).toMatch(UUID);
 });
+
+const screenshot = {
+  id: "F1",
+  name: "screenshot.png",
+  filetype: "png",
+  mimetype: "image/png",
+  size: 421_888,
+  permalink: "https://workspace.slack.com/files/U1/F1/screenshot.png",
+};
+
+test("thread rows name the files of a file-only reply", async () => {
+  const api = stubApi({
+    "conversations.replies": [
+      {
+        ok: true,
+        messages: [
+          { ts: "1700000000.000000", user: "U1", text: "root" },
+          { ts: "1700000001.000000", user: "U1", text: "", files: [screenshot] },
+        ],
+      },
+    ],
+    "users.info": [{ ok: true, user: { id: "U1", real_name: "Adam" } }],
+  });
+
+  const view = await run((slack) => slack.thread(threadTarget("C1:1700000000.000000"), 20), api);
+
+  expect(view.rows[1]?.message).toBe("[file] screenshot.png (image/png, 412 KB)");
+  expect(view.rows[1]?.files.map((file) => file.id)).toEqual(["F1"]);
+});
+
+test("activity reads the message behind a DM whose feed text is empty, files included", async () => {
+  const api = stubApi({
+    "activity.feed": [
+      {
+        ok: true,
+        items: [
+          {
+            item: {
+              type: "dm",
+              bundle_info: {
+                payload: {
+                  dm_entry: {
+                    latest_message: {
+                      channel: "D1",
+                      ts: "1700000001.000000",
+                      author_user_id: "U1",
+                      text: "",
+                    },
+                  },
+                },
+              },
+            },
+          },
+        ],
+      },
+    ],
+    "conversations.history": [
+      { ok: true, messages: [{ ts: "1700000001.000000", user: "U1", text: "", files: [screenshot] }] },
+    ],
+    "users.info": [{ ok: true, user: { id: "U1", real_name: "Adam" } }],
+  });
+
+  const view = await run((slack) => slack.activity(20, "all"), api);
+
+  expect(view.rows[0]?.message).toBe("[file] screenshot.png (image/png, 412 KB)");
+  expect(view.rows[0]?.files.map((file) => file.id)).toEqual(["F1"]);
+});

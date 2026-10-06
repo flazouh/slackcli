@@ -325,7 +325,9 @@ export class Slack extends Context.Service<
        */
       const hydrate = (target: ActivityTarget) =>
         Effect.gen(function* () {
-          if (target.text !== undefined) return target;
+          // An empty text is what the feed sends for a file-only message, so it
+          // is fetched like a missing one: the files live only on the message.
+          if (target.text !== undefined && target.text !== "") return target;
 
           const inThread = target.threadTs !== undefined && target.threadTs !== target.ts;
           const found =
@@ -339,6 +341,7 @@ export class Slack extends Context.Service<
           return {
             ...target,
             text: messageText(found),
+            files: found.files,
             authorId: target.authorId ?? found.user,
           } satisfies ActivityTarget;
         });
