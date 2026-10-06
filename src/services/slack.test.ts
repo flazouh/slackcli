@@ -496,3 +496,117 @@ test("file fails with a re-login hint when Slack answers an image request with a
   expect(outcome._tag).toBe("Failure");
   if (outcome._tag === "Failure") expect(outcome.failure._tag).toBe("SlackAuthExpired");
 });
+
+const huddleRoot = (files: ReadonlyArray<string>) => ({
+  ts: "1791301348.609899",
+  user: "U1",
+  subtype: "huddle_thread",
+  text: "",
+  room: {
+    id: "R1",
+    date_start: 1791301348,
+    date_end: 1791303868,
+    has_ended: true,
+    participant_history: ["U1", "U2"],
+    attached_file_ids: files,
+  },
+});
+
+test("huddle prints attendees, duration, the AI notes and the transcript of a huddle thread", async () => {
+  const api = stubApi(
+    {
+      "conversations.replies": [
+        {
+          ok: true,
+          messages: [
+            huddleRoot(["F0C77BN7ZJ5", "F0C73ERJ2LW"]),
+            {
+              ts: "1791303900.000100",
+              user: "U1",
+              text: "",
+              files: [
+                {
+                  id: "F0C77BN7ZJ5",
+                  title: "Huddle notes: 10/6/26 in #proj-ori",
+                  filetype: "quip",
+                  url_private: "https://files.slack.com/files-pri/T1-F0C77BN7ZJ5/canvas",
+                },
+              ],
+            },
+          ],
+        },
+      ],
+      "files.info": [
+        {
+          ok: true,
+          file: {
+            id: "F0C77BN7ZJ5",
+            title: "Huddle notes: 10/6/26 in #proj-ori",
+            filetype: "quip",
+            url_private: "https://files.slack.com/files-pri/T1-F0C77BN7ZJ5/canvas",
+          },
+        },
+        {
+          ok: true,
+          file: {
+            id: "F0C73ERJ2LW",
+            title: "Huddle transcript",
+            filetype: "huddle_transcript",
+            url_private: "https://files.slack.com/files-pri/T1-F0C73ERJ2LW/huddle_transcript",
+          },
+        },
+      ],
+      "users.info": [
+        { ok: true, user: { id: "U1", real_name: "Alex" } },
+        { ok: true, user: { id: "U2", real_name: "Lab" } },
+      ],
+    },
+    {
+      "https://files.slack.com/files-pri/T1-F0C77BN7ZJ5/canvas": {
+        body: "<h1>Summary</h1><p>Ship the hook.</p>",
+        contentType: "text/html",
+      },
+      "https://files.slack.com/files-pri/T1-F0C73ERJ2LW/huddle_transcript": {
+        body: JSON.stringify({ segments: [{ start_time: 20, speaker: "@lab", text: "Hi" }] }),
+        contentType: "application/json",
+      },
+    }
+  );
+
+  const view = await run((slack) => slack.huddle(threadTarget("C1:1791301348.609899")), api);
+
+  expect(view.isHuddle).toBe(true);
+  expect(view.attendees).toEqual(["Alex", "Lab"]);
+  expect(view.durationSeconds).toBe(2520);
+  expect(view.notes?.text).toBe("Summary\n\nShip the hook.");
+  expect(view.transcript?.text).toBe("0:20 @lab: Hi");
+  expect(view.missing).toEqual([]);
+});
+
+test("huddle says which part is missing when a huddle left no AI notes", async () => {
+  const api = stubApi({
+    "conversations.replies": [{ ok: true, messages: [huddleRoot([])] }],
+    "users.info": [
+      { ok: true, user: { id: "U1", real_name: "Alex" } },
+      { ok: true, user: { id: "U2", real_name: "Lab" } },
+    ],
+  });
+
+  const view = await run((slack) => slack.huddle(threadTarget("C1:1791301348.609899")), api);
+
+  expect(view.notes).toBeUndefined();
+  expect(view.transcript).toBeUndefined();
+  expect(view.missing).toEqual(["AI notes", "transcript"]);
+});
+
+test("huddle on an ordinary thread says it is not a huddle", async () => {
+  const api = stubApi({
+    "conversations.replies": [
+      { ok: true, messages: [{ ts: "1700000000.000000", user: "U1", text: "just a thread" }] },
+    ],
+  });
+
+  const view = await run((slack) => slack.huddle(threadTarget("C1:1700000000.000000")), api);
+
+  expect(view.isHuddle).toBe(false);
+});

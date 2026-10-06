@@ -9,7 +9,13 @@ import { ChannelDirectory } from "../services/channel-directory.ts";
 import { writeSession } from "../services/credentials.ts";
 import { Slack } from "../services/slack.ts";
 import { collect, verify } from "./login.ts";
-import { paintFor, renderMentions, renderMessages, renderSearch } from "./render.ts";
+import {
+  paintFor,
+  renderHuddle,
+  renderMentions,
+  renderMessages,
+  renderSearch,
+} from "./render.ts";
 import type { RenderOptions } from "./render.ts";
 
 const limit = Flag.integer("limit").pipe(
@@ -143,6 +149,24 @@ const thread = Command.make(
     yield* show(view, config.json, () => renderMessages(header, view.rows, layout(config)));
   })
 ).pipe(Command.withDescription("Show recent replies in a thread"));
+
+const huddle = Command.make(
+  "huddle",
+  {
+    target: Argument.string("target").pipe(
+      Argument.withDescription("The huddle's thread link, or channel:timestamp")
+    ),
+    json,
+  },
+  Effect.fn("huddle")(function* (config) {
+    const slack = yield* Slack;
+    const target = yield* Effect.fromResult(parseThreadTarget(config.target));
+    const view = yield* slack.huddle(target);
+    yield* show(view, config.json, () => renderHuddle(view, layout({ full: true })));
+  })
+).pipe(
+  Command.withDescription("Show a huddle: who attended, how long, its AI notes and its transcript")
+);
 
 /** Both activity commands read the same feed; they differ only in what it filters to. */
 const activityCommand = (name: string, scope: "mentions" | "all", description: string) =>
@@ -404,6 +428,7 @@ export const slackcli = Command.make("slackcli", {}).pipe(
     read,
     search,
     thread,
+    huddle,
     mentions,
     inbox,
     send,

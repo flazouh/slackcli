@@ -21,7 +21,8 @@ export interface FileRow {
 export const fileKind = (file: SlackFile): FileKind => {
   if (
     file.filetype === "huddle_transcript" ||
-    file.permalink?.endsWith("/huddle_transcript") === true
+    file.permalink?.endsWith("/huddle_transcript") === true ||
+    /\btranscript\b/i.test(file.title ?? file.name ?? "")
   ) {
     return "transcript";
   }

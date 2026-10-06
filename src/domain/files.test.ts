@@ -108,3 +108,9 @@ test("a file Slack hides from this token still gets a line", () => {
 
   expect(row?.message).toBe("[file] F00000009 (hidden by Slack)");
 });
+
+test("a file titled as a transcript counts as a transcript whatever its filetype", () => {
+  expect(fileRows([{ id: "F1", title: "Huddle transcript", filetype: "text" }])[0]?.kind).toBe(
+    "transcript"
+  );
+});

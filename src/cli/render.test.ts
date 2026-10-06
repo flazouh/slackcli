@@ -1,7 +1,7 @@
 import { expect, test } from "bun:test";
 
 import type { MessageRow } from "../domain/rows.ts";
-import { paintFor, renderMessages } from "./render.ts";
+import { paintFor, renderHuddle, renderMessages } from "./render.ts";
 
 const options = {
   paint: paintFor(false),
@@ -30,4 +30,39 @@ test("one hidden line uses the singular label", () => {
 
   expect(output).toContain("… +1 line");
   expect(output).not.toContain("+1 lines");
+});
+
+test("a huddle prints attendees, duration, notes and transcript, and names what is missing", () => {
+  const output = renderHuddle(
+    {
+      channel: "#proj-ori",
+      url: "https://app.slack.com/client/E1/C1/p1791301348609899",
+      isHuddle: true,
+      attendees: ["Alex", "Lab"],
+      startedAt: "2026-10-06T10:22:28.000Z",
+      durationSeconds: 2520,
+      ended: true,
+      notes: undefined,
+      transcript: {
+        file: {
+          id: "F0C73ERJ2LW",
+          kind: "transcript",
+          name: undefined,
+          title: "Huddle transcript",
+          filetype: "huddle_transcript",
+          mimetype: undefined,
+          size: undefined,
+          permalink: undefined,
+        },
+        text: "0:20 @lab: Hi",
+      },
+      missing: ["AI notes"],
+    },
+    options
+  );
+
+  expect(output).toContain("Attended: Alex, Lab");
+  expect(output).toContain("Duration: 42 min");
+  expect(output).toContain("AI notes: none in this thread");
+  expect(output).toContain("Transcript (F0C73ERJ2LW)\n0:20 @lab: Hi");
 });

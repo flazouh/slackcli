@@ -2,12 +2,12 @@ import { randomUUID } from "node:crypto";
 
 import { Context, Effect, Layer } from "effect";
 
-import { SlackAuthExpired, SlackResponseInvalid } from "../domain/errors.ts";
+import { explain, SlackAuthExpired, SlackResponseInvalid } from "../domain/errors.ts";
 import type { ChannelNotFound, SlackCallError } from "../domain/errors.ts";
-import { fileRows } from "../domain/files.ts";
+import { fileKind, fileRows } from "../domain/files.ts";
 import type { FileRow } from "../domain/files.ts";
 import { plainText } from "../domain/file-text.ts";
-import { mentionedIds, messageText } from "../domain/message-text.ts";
+import { mentionedIds, messageText, slackTsToIso } from "../domain/message-text.ts";
 import {
   ActivityFeedPayload,
   AuthTestPayload,
@@ -18,7 +18,7 @@ import {
   SearchPayload,
   UsersListPayload,
 } from "../domain/slack-schema.ts";
-import type { SlackMessage, SlackUser } from "../domain/slack-schema.ts";
+import type { SlackFile, SlackMessage, SlackUser } from "../domain/slack-schema.ts";
 import {
   activityPeopleIds,
   activityTargets,
@@ -94,6 +94,21 @@ export interface FetchedFile {
 export interface FileTextView {
   readonly file: FileRow;
   readonly text: string;
+}
+
+export interface HuddleView {
+  readonly channel: string;
+  readonly url: string;
+  /** False when the thread is not one a huddle posted, so nothing else applies. */
+  readonly isHuddle: boolean;
+  readonly attendees: ReadonlyArray<string>;
+  readonly startedAt: string | undefined;
+  readonly durationSeconds: number | undefined;
+  readonly ended: boolean;
+  readonly notes: FileTextView | undefined;
+  readonly transcript: FileTextView | undefined;
+  /** "AI notes" and "transcript" when absent, with the reason when a download failed. */
+  readonly missing: ReadonlyArray<string>;
 }
 
 export type ReadError = SlackCallError | ChannelNotFound;
@@ -187,6 +202,7 @@ export class Slack extends Context.Service<
     readonly file: (id: string) => Effect.Effect<FetchedFile, SlackCallError>;
     /** A canvas, transcript or text file as plain text. */
     readonly fileText: (id: string) => Effect.Effect<FileTextView, SlackCallError>;
+    readonly huddle: (target: ThreadTarget) => Effect.Effect<HuddleView, SlackCallError>;
   }
 >()("slackcli/Slack") {
   static readonly layer: Layer.Layer<
@@ -540,14 +556,18 @@ export class Slack extends Context.Service<
         } satisfies IdentityView;
       })();
 
-      const fetchFile = Effect.fn("Slack.file")(function* (id: string) {
-        const info = yield* api.call(slackCall("files.info", { file: id }, FileInfoPayload));
-        const [row] = fileRows([info.file]);
-        const url = info.file.url_private_download ?? info.file.url_private;
+      const fileInfo = (id: string) =>
+        api
+          .call(slackCall("files.info", { file: id }, FileInfoPayload))
+          .pipe(Effect.map((payload) => payload.file));
+
+      const downloadFile = Effect.fn("Slack.downloadFile")(function* (file: SlackFile) {
+        const [row] = fileRows([file]);
+        const url = file.url_private_download ?? file.url_private;
         if (row === undefined || url === undefined) {
           return yield* new SlackResponseInvalid({
             method: "files.info",
-            detail: `file ${id} has no download URL (mode: ${info.file.mode ?? "unknown"})`,
+            detail: `file ${file.id} has no download URL (mode: ${file.mode ?? "unknown"})`,
           });
         }
 
@@ -568,15 +588,113 @@ export class Slack extends Context.Service<
         } satisfies FetchedFile;
       });
 
-      const fileText = Effect.fn("Slack.fileText")(function* (id: string) {
-        const fetched = yield* fetchFile(id);
-        const raw = new TextDecoder().decode(fetched.bytes);
-        return { file: fetched.file, text: plainText(raw, fetched.contentType) } satisfies FileTextView;
+      const fetchFile = (id: string) => fileInfo(id).pipe(Effect.flatMap(downloadFile));
+
+      const textOf = (file: SlackFile) =>
+        downloadFile(file).pipe(
+          Effect.map((fetched) => {
+            const raw = new TextDecoder().decode(fetched.bytes);
+            return { file: fetched.file, text: plainText(raw, fetched.contentType) } satisfies FileTextView;
+          })
+        );
+
+      const fileText = (id: string) => fileInfo(id).pipe(Effect.flatMap(textOf));
+
+      /**
+       * A huddle posts one message in its channel and carries its notes canvas
+       * and transcript as files: listed on the room, and posted in the thread.
+       * Both lists are read, because either can be the only one that has them.
+       */
+      const huddle = Effect.fn("Slack.huddle")(function* (target: ThreadTarget) {
+        const replies = yield* api.call(
+          slackCall(
+            "conversations.replies",
+            { channel: target.channel, ts: target.threadTs, limit: THREAD_PAGE },
+            HistoryPayload
+          )
+        );
+        const workspace = yield* api.workspaceRef;
+        const channel = channelLabel(target.channel, yield* channels.names);
+        const url = permalink(workspace, target.channel, target.threadTs);
+        const room = replies.messages.find((message) => message.room !== undefined)?.room;
+        const isHuddle =
+          room !== undefined ||
+          replies.messages.some((message) => message.subtype === "huddle_thread");
+
+        if (!isHuddle) {
+          return {
+            channel,
+            url,
+            isHuddle,
+            attendees: [],
+            startedAt: undefined,
+            durationSeconds: undefined,
+            ended: false,
+            notes: undefined,
+            transcript: undefined,
+            missing: [],
+          } satisfies HuddleView;
+        }
+
+        const ids = [
+          ...new Set([
+            ...(room?.attached_file_ids ?? []),
+            ...replies.messages.flatMap((message) => (message.files ?? []).map((file) => file.id)),
+          ]),
+        ];
+        const files = yield* Effect.forEach(
+          ids,
+          (id) => fileInfo(id).pipe(Effect.catch(() => Effect.succeed(undefined))),
+          { concurrency: HYDRATE_CONCURRENCY }
+        ).pipe(Effect.map((found) => found.filter((file) => file !== undefined)));
+
+        const canvases = files.filter((file) => fileKind(file) === "canvas");
+        const notesFile =
+          canvases.find((file) => /huddle notes/i.test(file.title ?? file.name ?? "")) ?? canvases[0];
+        const transcriptFile = files.find((file) => fileKind(file) === "transcript");
+
+        const missing: Array<string> = [];
+        const read = (file: SlackFile | undefined, label: string) =>
+          file === undefined
+            ? Effect.sync(() => {
+                missing.push(label);
+                return undefined;
+              })
+            : textOf(file).pipe(
+                Effect.catch((error: SlackCallError) =>
+                  Effect.sync(() => {
+                    missing.push(`${label} (${explain(error) ?? error._tag})`);
+                    return undefined;
+                  })
+                )
+              );
+
+        const notes = yield* read(notesFile, "AI notes");
+        const transcript = yield* read(transcriptFile, "transcript");
+        const attendeeIds = room?.participant_history ?? room?.participants ?? [];
+        const people = yield* users.names(attendeeIds);
+
+        return {
+          channel,
+          url,
+          isHuddle,
+          attendees: attendeeIds.map((id) => people.get(id) ?? id),
+          startedAt: room?.date_start === undefined ? undefined : slackTsToIso(String(room.date_start)),
+          durationSeconds:
+            room?.date_start !== undefined && room.date_end !== undefined && room.date_end > 0
+              ? room.date_end - room.date_start
+              : undefined,
+          ended: room?.has_ended ?? false,
+          notes,
+          transcript,
+          missing,
+        } satisfies HuddleView;
       });
 
       return {
         file: fetchFile,
         fileText,
+        huddle,
         read,
         search,
         thread,
