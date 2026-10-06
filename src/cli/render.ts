@@ -1,4 +1,5 @@
 import type { MentionRow, MessageRow, SearchRow } from "../domain/rows.ts";
+import type { HuddleView, SinceView } from "../services/slack.ts";
 
 export interface Paint {
   readonly dim: (value: string) => string;
@@ -200,4 +201,71 @@ export const renderMentions = (
       return [first, options.paint.dim(`   ${label}  ${row.url}`)];
     })
     .join("\n");
+};
+
+const duration = (seconds: number): string => {
+  const minutes = Math.round(seconds / 60);
+  if (minutes < 60) return `${minutes} min`;
+  return `${Math.floor(minutes / 60)} h ${minutes % 60} min`;
+};
+
+/**
+ * Notes and transcript are printed whole: a huddle is read to learn what was
+ * said, and a clamped transcript hides exactly that.
+ */
+export const renderHuddle = (view: HuddleView, options: RenderOptions): string => {
+  const { paint } = options;
+  const header = paint.accent(`Huddle in ${view.channel}`);
+  if (!view.isHuddle) return `${paint.dim(`${view.channel}: this thread is not a huddle`)}\n${view.url}`;
+
+  const facts = [
+    `${header}  ${paint.dim(view.url)}`,
+    `Attended: ${view.attendees.length === 0 ? "unknown" : view.attendees.join(", ")}`,
+    ...(view.startedAt === undefined ? [] : [`Started: ${view.startedAt}`]),
+    view.durationSeconds === undefined
+      ? `Duration: ${view.ended ? "unknown" : "still running"}`
+      : `Duration: ${duration(view.durationSeconds)}`,
+  ];
+
+  const section = (label: string, part: HuddleView["notes"], missingKey: string): string => {
+    if (part !== undefined) return `${paint.bold(`${label} (${part.file.id})`)}\n${part.text}`;
+    const reason = view.missing.find((entry) => entry.startsWith(missingKey));
+    const detail = reason === undefined || reason === missingKey ? "none in this thread" : reason;
+    return paint.bold(`${label}: ${detail}`);
+  };
+
+  return [
+    facts.join("\n"),
+    section("AI notes", view.notes, "AI notes"),
+    section("Transcript", view.transcript, "transcript"),
+  ].join("\n\n");
+};
+
+/**
+ * `since` exists so nothing the user said is missed, so it never clamps. Each
+ * row names its channel and thread; the user's own posts carry a mark.
+ */
+export const renderSince = (view: SinceView, options: RenderOptions): string => {
+  const { paint } = options;
+  const header = paint.dim(
+    `since ${view.since}: ${view.rows.length} messages` +
+      (view.cut > 0 ? `, ${view.cut} older messages cut (raise --limit)` : "")
+  );
+  if (view.rows.length === 0) return header;
+
+  const columns = columnsFor(view.rows, options.now);
+  const rows = view.rows.flatMap((row) => [
+    line(
+      paint,
+      {
+        mark: row.mine ? paint.accent("›") : " ",
+        time: clock(row.at, options.now),
+        author: row.author,
+        message: tidy(row.message),
+      },
+      columns
+    ),
+    paint.dim(`   ${row.channel}  ${row.url}`),
+  ]);
+  return [header, ...rows].join("\n");
 };

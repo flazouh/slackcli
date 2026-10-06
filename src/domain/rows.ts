@@ -6,8 +6,10 @@ import {
   slackTsToIso,
 } from "./message-text.ts";
 import type { PeopleIndex } from "./message-text.ts";
+import { fileRows } from "./files.ts";
+import type { FileRow } from "./files.ts";
 import { permalink } from "./thread-target.ts";
-import type { ActivityItem, SearchMatch, SlackMessage } from "./slack-schema.ts";
+import type { ActivityItem, SearchMatch, SlackFile, SlackMessage } from "./slack-schema.ts";
 
 export interface MessageRow {
   readonly author: string;
@@ -16,6 +18,7 @@ export interface MessageRow {
   readonly url: string;
   /** Present on a message that started a thread, so the reader knows to open it. */
   readonly replies: number | undefined;
+  readonly files: ReadonlyArray<FileRow>;
 }
 
 export interface SearchRow {
@@ -24,6 +27,7 @@ export interface SearchRow {
   readonly message: string;
   readonly at: string;
   readonly url: string | undefined;
+  readonly files: ReadonlyArray<FileRow>;
 }
 
 export interface MentionRow {
@@ -34,6 +38,7 @@ export interface MentionRow {
   readonly message: string;
   readonly at: string;
   readonly url: string;
+  readonly files: ReadonlyArray<FileRow>;
 }
 
 /**
@@ -61,6 +66,7 @@ export const historyRows = (
       at: slackTsToIso(message.ts),
       url: permalink(context.workspace, context.channelId, message.ts),
       replies: message.reply_count,
+      files: fileRows(message.files),
     }));
 
 export const searchRows = (
@@ -75,6 +81,7 @@ export const searchRows = (
     message: readableMessage(match, context.people),
     at: slackTsToIso(match.ts),
     url: match.permalink,
+    files: fileRows(match.files),
   }));
 
 /**
@@ -120,6 +127,8 @@ export interface ActivityTarget {
   readonly threadTs: string | undefined;
   readonly authorId: string | undefined;
   readonly text: string | undefined;
+  /** Only known once the item is hydrated from its message; the feed never carries files. */
+  readonly files?: ReadonlyArray<SlackFile> | undefined;
   readonly reactorId: string | undefined;
   readonly reactionName: string | undefined;
   readonly unreadCount: number | undefined;
@@ -245,8 +254,14 @@ export const mentionRows = (
       unread: target.unread,
       channel: channelLabel(target.channel, context.channels),
       author: named ?? (target.bot ? "Slack bot" : personId ?? "Slack user"),
-      message: target.text ? readableSlackText(target.text, context.people) : NO_TEXT,
+      message:
+        target.files !== undefined && target.files.length > 0
+          ? readableMessage({ text: target.text, files: target.files }, context.people)
+          : target.text
+            ? readableSlackText(target.text, context.people)
+            : NO_TEXT,
       at: slackTsToIso(target.ts),
       url: permalink(context.workspace, target.channel, target.ts, target.threadTs),
+      files: fileRows(target.files),
     };
   });

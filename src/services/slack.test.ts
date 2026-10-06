@@ -15,7 +15,10 @@ const threadTarget = (value: string) => {
   return parsed.success;
 };
 
-const stubApi = (answers: Readonly<Record<string, ReadonlyArray<unknown>>>) => {
+const stubApi = (
+  answers: Readonly<Record<string, ReadonlyArray<unknown>>>,
+  downloads: Readonly<Record<string, { readonly body: string; readonly contentType: string }>> = {}
+) => {
   const calls: Array<string> = [];
   const requests: Array<{
     readonly method: string;
@@ -34,6 +37,13 @@ const stubApi = (answers: Readonly<Record<string, ReadonlyArray<unknown>>>) => {
     },
     workspaceRef: Effect.succeed("T1"),
     session: Effect.die("the Slack service must not read credentials directly"),
+    download: (url) => {
+      calls.push(`download ${url}`);
+      const found = downloads[url];
+      return found === undefined
+        ? Effect.die(`Unexpected download of ${url}`)
+        : Effect.succeed({ bytes: new TextEncoder().encode(found.body), contentType: found.contentType });
+    },
   });
 
   return { calls, requests, layer };
@@ -338,4 +348,265 @@ test("reply sends the root timestamp as thread_ts", async () => {
     params: { channel: "C1", text: "on it", thread_ts: "1700000000.000000" },
   });
   expect(api.requests[0]?.params["client_msg_id"]).toMatch(UUID);
+});
+
+const screenshot = {
+  id: "F1",
+  name: "screenshot.png",
+  filetype: "png",
+  mimetype: "image/png",
+  size: 421_888,
+  permalink: "https://workspace.slack.com/files/U1/F1/screenshot.png",
+};
+
+test("thread rows name the files of a file-only reply", async () => {
+  const api = stubApi({
+    "conversations.replies": [
+      {
+        ok: true,
+        messages: [
+          { ts: "1700000000.000000", user: "U1", text: "root" },
+          { ts: "1700000001.000000", user: "U1", text: "", files: [screenshot] },
+        ],
+      },
+    ],
+    "users.info": [{ ok: true, user: { id: "U1", real_name: "Adam" } }],
+  });
+
+  const view = await run((slack) => slack.thread(threadTarget("C1:1700000000.000000"), 20), api);
+
+  expect(view.rows[1]?.message).toBe("[file] screenshot.png (image/png, 412 KB)");
+  expect(view.rows[1]?.files.map((file) => file.id)).toEqual(["F1"]);
+});
+
+test("activity reads the message behind a DM whose feed text is empty, files included", async () => {
+  const api = stubApi({
+    "activity.feed": [
+      {
+        ok: true,
+        items: [
+          {
+            item: {
+              type: "dm",
+              bundle_info: {
+                payload: {
+                  dm_entry: {
+                    latest_message: {
+                      channel: "D1",
+                      ts: "1700000001.000000",
+                      author_user_id: "U1",
+                      text: "",
+                    },
+                  },
+                },
+              },
+            },
+          },
+        ],
+      },
+    ],
+    "conversations.history": [
+      { ok: true, messages: [{ ts: "1700000001.000000", user: "U1", text: "", files: [screenshot] }] },
+    ],
+    "users.info": [{ ok: true, user: { id: "U1", real_name: "Adam" } }],
+  });
+
+  const view = await run((slack) => slack.activity(20, "all"), api);
+
+  expect(view.rows[0]?.message).toBe("[file] screenshot.png (image/png, 412 KB)");
+  expect(view.rows[0]?.files.map((file) => file.id)).toEqual(["F1"]);
+});
+
+test("file reads the file's metadata, then downloads its private URL", async () => {
+  const api = stubApi(
+    {
+      "files.info": [
+        {
+          ok: true,
+          file: {
+            ...screenshot,
+            url_private_download: "https://files.slack.com/files-pri/T1-F1/download/screenshot.png",
+          },
+        },
+      ],
+    },
+    {
+      "https://files.slack.com/files-pri/T1-F1/download/screenshot.png": {
+        body: "PNG-BYTES",
+        contentType: "image/png",
+      },
+    }
+  );
+
+  const fetched = await run((slack) => slack.file("F1"), api);
+
+  expect(fetched.file).toMatchObject({ id: "F1", name: "screenshot.png", kind: "file" });
+  expect(new TextDecoder().decode(fetched.bytes)).toBe("PNG-BYTES");
+  expect(api.requests[0]).toMatchObject({ method: "files.info", params: { file: "F1" } });
+});
+
+test("file text converts a canvas to plain text", async () => {
+  const api = stubApi(
+    {
+      "files.info": [
+        {
+          ok: true,
+          file: {
+            id: "F2",
+            title: "Huddle notes",
+            filetype: "quip",
+            url_private: "https://files.slack.com/files-pri/T1-F2/canvas",
+          },
+        },
+      ],
+    },
+    {
+      "https://files.slack.com/files-pri/T1-F2/canvas": {
+        body: "<h1>Huddle notes</h1><p>Ship it.</p>",
+        contentType: "text/html",
+      },
+    }
+  );
+
+  const text = await run((slack) => slack.fileText("F2"), api);
+
+  expect(text.text).toBe("Huddle notes\n\nShip it.");
+});
+
+test("file fails with a re-login hint when Slack answers an image request with a sign-in page", async () => {
+  const api = stubApi(
+    {
+      "files.info": [
+        {
+          ok: true,
+          file: { ...screenshot, url_private: "https://files.slack.com/files-pri/T1-F1/screenshot.png" },
+        },
+      ],
+    },
+    {
+      "https://files.slack.com/files-pri/T1-F1/screenshot.png": {
+        body: "<!DOCTYPE html><title>Slack</title>",
+        contentType: "text/html; charset=utf-8",
+      },
+    }
+  );
+
+  const outcome = await run((slack) => Effect.result(slack.file("F1")), api);
+
+  expect(outcome._tag).toBe("Failure");
+  if (outcome._tag === "Failure") expect(outcome.failure._tag).toBe("SlackAuthExpired");
+});
+
+const huddleRoot = (files: ReadonlyArray<string>) => ({
+  ts: "1791301348.609899",
+  user: "U1",
+  subtype: "huddle_thread",
+  text: "",
+  room: {
+    id: "R1",
+    date_start: 1791301348,
+    date_end: 1791303868,
+    has_ended: true,
+    participant_history: ["U1", "U2"],
+    attached_file_ids: files,
+  },
+});
+
+test("huddle prints attendees, duration, the AI notes and the transcript of a huddle thread", async () => {
+  const api = stubApi(
+    {
+      "conversations.replies": [
+        {
+          ok: true,
+          messages: [
+            huddleRoot(["F0C77BN7ZJ5", "F0C73ERJ2LW"]),
+            {
+              ts: "1791303900.000100",
+              user: "U1",
+              text: "",
+              files: [
+                {
+                  id: "F0C77BN7ZJ5",
+                  title: "Huddle notes: 10/6/26 in #proj-ori",
+                  filetype: "quip",
+                  url_private: "https://files.slack.com/files-pri/T1-F0C77BN7ZJ5/canvas",
+                },
+              ],
+            },
+          ],
+        },
+      ],
+      "files.info": [
+        {
+          ok: true,
+          file: {
+            id: "F0C77BN7ZJ5",
+            title: "Huddle notes: 10/6/26 in #proj-ori",
+            filetype: "quip",
+            url_private: "https://files.slack.com/files-pri/T1-F0C77BN7ZJ5/canvas",
+          },
+        },
+        {
+          ok: true,
+          file: {
+            id: "F0C73ERJ2LW",
+            title: "Huddle transcript",
+            filetype: "huddle_transcript",
+            url_private: "https://files.slack.com/files-pri/T1-F0C73ERJ2LW/huddle_transcript",
+          },
+        },
+      ],
+      "users.info": [
+        { ok: true, user: { id: "U1", real_name: "Alex" } },
+        { ok: true, user: { id: "U2", real_name: "Lab" } },
+      ],
+    },
+    {
+      "https://files.slack.com/files-pri/T1-F0C77BN7ZJ5/canvas": {
+        body: "<h1>Summary</h1><p>Ship the hook.</p>",
+        contentType: "text/html",
+      },
+      "https://files.slack.com/files-pri/T1-F0C73ERJ2LW/huddle_transcript": {
+        body: JSON.stringify({ segments: [{ start_time: 20, speaker: "@lab", text: "Hi" }] }),
+        contentType: "application/json",
+      },
+    }
+  );
+
+  const view = await run((slack) => slack.huddle(threadTarget("C1:1791301348.609899")), api);
+
+  expect(view.isHuddle).toBe(true);
+  expect(view.attendees).toEqual(["Alex", "Lab"]);
+  expect(view.durationSeconds).toBe(2520);
+  expect(view.notes?.text).toBe("Summary\n\nShip the hook.");
+  expect(view.transcript?.text).toBe("0:20 @lab: Hi");
+  expect(view.missing).toEqual([]);
+});
+
+test("huddle says which part is missing when a huddle left no AI notes", async () => {
+  const api = stubApi({
+    "conversations.replies": [{ ok: true, messages: [huddleRoot([])] }],
+    "users.info": [
+      { ok: true, user: { id: "U1", real_name: "Alex" } },
+      { ok: true, user: { id: "U2", real_name: "Lab" } },
+    ],
+  });
+
+  const view = await run((slack) => slack.huddle(threadTarget("C1:1791301348.609899")), api);
+
+  expect(view.notes).toBeUndefined();
+  expect(view.transcript).toBeUndefined();
+  expect(view.missing).toEqual(["AI notes", "transcript"]);
+});
+
+test("huddle on an ordinary thread says it is not a huddle", async () => {
+  const api = stubApi({
+    "conversations.replies": [
+      { ok: true, messages: [{ ts: "1700000000.000000", user: "U1", text: "just a thread" }] },
+    ],
+  });
+
+  const view = await run((slack) => slack.huddle(threadTarget("C1:1700000000.000000")), api);
+
+  expect(view.isHuddle).toBe(false);
 });

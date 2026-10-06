@@ -66,6 +66,41 @@ export const Attachment = Schema.Struct({
 });
 
 /**
+ * A file shared on a message: an upload, a canvas, a huddle's notes or its
+ * transcript. Only `id` is certain; a file Slack hides from this token
+ * (`mode: "hidden_by_limit"`, `"tombstone"`) arrives with little else.
+ */
+export const SlackFile = Schema.Struct({
+  id: Schema.String,
+  name: Schema.optionalKey(Schema.String),
+  title: Schema.optionalKey(Schema.String),
+  filetype: Schema.optionalKey(Schema.String),
+  mimetype: Schema.optionalKey(Schema.String),
+  pretty_type: Schema.optionalKey(Schema.String),
+  size: Schema.optionalKey(Schema.Number),
+  mode: Schema.optionalKey(Schema.String),
+  permalink: Schema.optionalKey(Schema.String),
+  url_private: Schema.optionalKey(Schema.String),
+  url_private_download: Schema.optionalKey(Schema.String),
+}).annotate({ identifier: "SlackFile" });
+export type SlackFile = typeof SlackFile.Type;
+
+/**
+ * What Slack attaches to the message that a huddle posts in its channel. Times
+ * are Unix seconds; `participant_history` lists everyone who joined at any point.
+ */
+export const HuddleRoom = Schema.Struct({
+  id: Schema.optionalKey(Schema.String),
+  date_start: Schema.optionalKey(Schema.Number),
+  date_end: Schema.optionalKey(Schema.Number),
+  has_ended: Schema.optionalKey(Schema.Boolean),
+  participants: Schema.optionalKey(Schema.Array(Schema.String)),
+  participant_history: Schema.optionalKey(Schema.Array(Schema.String)),
+  attached_file_ids: Schema.optionalKey(Schema.Array(Schema.String)),
+});
+export type HuddleRoom = typeof HuddleRoom.Type;
+
+/**
  * The fields slackcli reads off any Slack message, whatever endpoint produced
  * it. `ts` is the only field Slack always sends.
  */
@@ -81,6 +116,9 @@ export const SlackMessage = Schema.Struct({
   permalink: Schema.optionalKey(Schema.String),
   blocks: Schema.optionalKey(Schema.Array(RichTextNodeSchema)),
   attachments: Schema.optionalKey(Schema.Array(Attachment)),
+  files: Schema.optionalKey(Schema.Array(SlackFile)),
+  subtype: Schema.optionalKey(Schema.String),
+  room: Schema.optionalKey(HuddleRoom),
 }).annotate({ identifier: "SlackMessage" });
 export type SlackMessage = typeof SlackMessage.Type;
 
@@ -145,6 +183,7 @@ export const SearchMatch = Schema.Struct({
   ),
   blocks: Schema.optionalKey(Schema.Array(RichTextNodeSchema)),
   attachments: Schema.optionalKey(Schema.Array(Attachment)),
+  files: Schema.optionalKey(Schema.Array(SlackFile)),
 }).annotate({ identifier: "SearchMatch" });
 export type SearchMatch = typeof SearchMatch.Type;
 
@@ -158,6 +197,7 @@ export const SearchPayload = Schema.Struct({
     Schema.Struct({
       total: Schema.optionalKey(Schema.Number),
       matches: Schema.optionalKey(Schema.Array(SearchMatch)),
+      paging: Schema.optionalKey(Schema.Struct({ pages: Schema.optionalKey(Schema.Number) })),
     })
   ),
   users: Schema.optionalKey(Schema.Record(Schema.String, SlackUser)),
@@ -169,6 +209,12 @@ export const ConversationListPayload = Schema.Struct({
   response_metadata: Schema.optionalKey(
     Schema.Struct({ next_cursor: Schema.optionalKey(Schema.String) })
   ),
+});
+
+export const FileInfoPayload = Schema.Struct({
+  file: SlackFile,
+  /** The text itself, for a snippet or a plain-text file. */
+  content: Schema.optionalKey(Schema.String),
 });
 
 export const UserInfoPayload = Schema.Struct({ user: SlackUser });

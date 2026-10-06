@@ -19,6 +19,7 @@ test("a resolve-triggered refresh also updates the names view", async () => {
     },
     workspaceRef: Effect.succeed("T1"),
     session: Effect.die("the directory must not read credentials"),
+    download: () => Effect.die("the directory must not download files"),
   });
   const cacheHome = mkdtempSync(join(tmpdir(), "slackcli-channel-cache-"));
   const env = { XDG_CACHE_HOME: cacheHome };
