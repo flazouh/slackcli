@@ -210,6 +210,12 @@ export const ConversationListPayload = Schema.Struct({
   ),
 });
 
+export const FileInfoPayload = Schema.Struct({
+  file: SlackFile,
+  /** The text itself, for a snippet or a plain-text file. */
+  content: Schema.optionalKey(Schema.String),
+});
+
 export const UserInfoPayload = Schema.Struct({ user: SlackUser });
 
 export const UsersListPayload = Schema.Struct({

@@ -35,3 +35,10 @@ test("an unattended write fails before it reads credentials", async () => {
   expect(result.stderr).toContain("Nothing was sent");
   expect(result.stderr).toContain("with --yes to post it");
 });
+
+test("file rejects a reference with no file id before it reads credentials", async () => {
+  const result = await runCli(["file", "https://example.slack.com/archives/C1/p1700000000000000"]);
+
+  expect(result.exitCode).not.toBe(0);
+  expect(result.stderr).toContain("Not a Slack file reference");
+});

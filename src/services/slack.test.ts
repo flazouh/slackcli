@@ -15,7 +15,10 @@ const threadTarget = (value: string) => {
   return parsed.success;
 };
 
-const stubApi = (answers: Readonly<Record<string, ReadonlyArray<unknown>>>) => {
+const stubApi = (
+  answers: Readonly<Record<string, ReadonlyArray<unknown>>>,
+  downloads: Readonly<Record<string, { readonly body: string; readonly contentType: string }>> = {}
+) => {
   const calls: Array<string> = [];
   const requests: Array<{
     readonly method: string;
@@ -34,6 +37,13 @@ const stubApi = (answers: Readonly<Record<string, ReadonlyArray<unknown>>>) => {
     },
     workspaceRef: Effect.succeed("T1"),
     session: Effect.die("the Slack service must not read credentials directly"),
+    download: (url) => {
+      calls.push(`download ${url}`);
+      const found = downloads[url];
+      return found === undefined
+        ? Effect.die(`Unexpected download of ${url}`)
+        : Effect.succeed({ bytes: new TextEncoder().encode(found.body), contentType: found.contentType });
+    },
   });
 
   return { calls, requests, layer };
@@ -405,4 +415,84 @@ test("activity reads the message behind a DM whose feed text is empty, files inc
 
   expect(view.rows[0]?.message).toBe("[file] screenshot.png (image/png, 412 KB)");
   expect(view.rows[0]?.files.map((file) => file.id)).toEqual(["F1"]);
+});
+
+test("file reads the file's metadata, then downloads its private URL", async () => {
+  const api = stubApi(
+    {
+      "files.info": [
+        {
+          ok: true,
+          file: {
+            ...screenshot,
+            url_private_download: "https://files.slack.com/files-pri/T1-F1/download/screenshot.png",
+          },
+        },
+      ],
+    },
+    {
+      "https://files.slack.com/files-pri/T1-F1/download/screenshot.png": {
+        body: "PNG-BYTES",
+        contentType: "image/png",
+      },
+    }
+  );
+
+  const fetched = await run((slack) => slack.file("F1"), api);
+
+  expect(fetched.file).toMatchObject({ id: "F1", name: "screenshot.png", kind: "file" });
+  expect(new TextDecoder().decode(fetched.bytes)).toBe("PNG-BYTES");
+  expect(api.requests[0]).toMatchObject({ method: "files.info", params: { file: "F1" } });
+});
+
+test("file text converts a canvas to plain text", async () => {
+  const api = stubApi(
+    {
+      "files.info": [
+        {
+          ok: true,
+          file: {
+            id: "F2",
+            title: "Huddle notes",
+            filetype: "quip",
+            url_private: "https://files.slack.com/files-pri/T1-F2/canvas",
+          },
+        },
+      ],
+    },
+    {
+      "https://files.slack.com/files-pri/T1-F2/canvas": {
+        body: "<h1>Huddle notes</h1><p>Ship it.</p>",
+        contentType: "text/html",
+      },
+    }
+  );
+
+  const text = await run((slack) => slack.fileText("F2"), api);
+
+  expect(text.text).toBe("Huddle notes\n\nShip it.");
+});
+
+test("file fails with a re-login hint when Slack answers an image request with a sign-in page", async () => {
+  const api = stubApi(
+    {
+      "files.info": [
+        {
+          ok: true,
+          file: { ...screenshot, url_private: "https://files.slack.com/files-pri/T1-F1/screenshot.png" },
+        },
+      ],
+    },
+    {
+      "https://files.slack.com/files-pri/T1-F1/screenshot.png": {
+        body: "<!DOCTYPE html><title>Slack</title>",
+        contentType: "text/html; charset=utf-8",
+      },
+    }
+  );
+
+  const outcome = await run((slack) => Effect.result(slack.file("F1")), api);
+
+  expect(outcome._tag).toBe("Failure");
+  if (outcome._tag === "Failure") expect(outcome.failure._tag).toBe("SlackAuthExpired");
 });

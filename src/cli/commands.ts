@@ -1,8 +1,9 @@
-import { Console, Effect, Option } from "effect";
+import { Console, Effect, FileSystem, Option, Path } from "effect";
 import { Argument, Command, Flag, Prompt } from "effect/unstable/cli";
 import { FetchHttpClient } from "effect/unstable/http";
 
 import { WriteNotConfirmed } from "../domain/errors.ts";
+import { parseFileTarget } from "../domain/file-text.ts";
 import { parseMessageTarget, parseThreadTarget } from "../domain/thread-target.ts";
 import { ChannelDirectory } from "../services/channel-directory.ts";
 import { writeSession } from "../services/credentials.ts";
@@ -238,6 +239,62 @@ const edit = Command.make(
   })
 ).pipe(Command.withDescription("Replace the text of one of your own messages"));
 
+/**
+ * A file name from Slack is user input. Only its last path segment is used, and
+ * anything a shell or a file system would trip over is replaced.
+ */
+const safeFileName = (name: string): string =>
+  name.split(/[\\/]/).pop()?.replace(/[^\w.\- ]+/g, "_").replace(/^\.+/, "") || "slack-file";
+
+const file = Command.make(
+  "file",
+  {
+    target: Argument.string("target").pipe(
+      Argument.withDescription("A file id (F0123ABCD) or any Slack link to the file")
+    ),
+    output: Flag.string("output").pipe(
+      Flag.withAlias("o"),
+      Flag.optional,
+      Flag.withDescription("Where to save the file; defaults to its name in the current folder")
+    ),
+    text: Flag.boolean("text").pipe(
+      Flag.withDefault(false),
+      Flag.withDescription("Print a canvas, transcript or text file as plain text instead of saving it")
+    ),
+    json,
+  },
+  Effect.fn("file")(function* (config) {
+    const id = yield* Effect.fromResult(parseFileTarget(config.target));
+    const slack = yield* Slack;
+    const fs = yield* FileSystem.FileSystem;
+    const path = yield* Path.Path;
+    const output = Option.getOrUndefined(config.output);
+
+    if (config.text) {
+      const view = yield* slack.fileText(id);
+      if (output === undefined) {
+        yield* show(view, config.json, () => view.text);
+        return;
+      }
+      const target = path.resolve(output);
+      yield* fs.writeFileString(target, `${view.text}\n`);
+      yield* show({ file: view.file, path: target }, config.json, () => target);
+      return;
+    }
+
+    const fetched = yield* slack.file(id);
+    const target = path.resolve(
+      output ?? safeFileName(fetched.file.name ?? fetched.file.title ?? fetched.file.id)
+    );
+    yield* fs.writeFile(target, fetched.bytes);
+    yield* show(
+      { file: fetched.file, path: target, bytes: fetched.bytes.length },
+      config.json,
+      () => target
+    );
+  })
+).pipe(Command.withDescription("Download one Slack file, or print a canvas or transcript as text"));
+
 const refresh = Command.make(
   "refresh",
   {},
@@ -353,6 +410,7 @@ export const slackcli = Command.make("slackcli", {}).pipe(
     reply,
     edit,
     users,
+    file,
     login,
     whoami,
     refresh,

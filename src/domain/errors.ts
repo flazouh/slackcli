@@ -56,6 +56,10 @@ export class ThreadTargetInvalid extends Data.TaggedError("ThreadTargetInvalid")
   readonly value: string;
 }> {}
 
+export class FileTargetInvalid extends Data.TaggedError("FileTargetInvalid")<{
+  readonly value: string;
+}> {}
+
 /**
  * A write was requested without `--yes`.
  */
@@ -76,6 +80,7 @@ type SlackcliError =
   | SlackCallError
   | ChannelNotFound
   | ThreadTargetInvalid
+  | FileTargetInvalid
   | WriteNotConfirmed;
 
 /**
@@ -103,6 +108,8 @@ const MESSAGES: {
     `No channel matches "${error.name}". If it is new, run: slackcli refresh`,
   ThreadTargetInvalid: (error) =>
     `Not a Slack thread reference: ${error.value}. Use a message link, or C0123ABC:1700000000.000100`,
+  FileTargetInvalid: (error) =>
+    `Not a Slack file reference: ${error.value}. Use a file id such as F0123ABCD, or the file's link`,
   WriteNotConfirmed: (error) =>
     `Nothing was sent. Re-run \`slackcli ${error.action}\` with --yes to post it.`,
 };

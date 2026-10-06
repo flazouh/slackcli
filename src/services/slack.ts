@@ -2,12 +2,17 @@ import { randomUUID } from "node:crypto";
 
 import { Context, Effect, Layer } from "effect";
 
+import { SlackAuthExpired, SlackResponseInvalid } from "../domain/errors.ts";
 import type { ChannelNotFound, SlackCallError } from "../domain/errors.ts";
+import { fileRows } from "../domain/files.ts";
+import type { FileRow } from "../domain/files.ts";
+import { plainText } from "../domain/file-text.ts";
 import { mentionedIds, messageText } from "../domain/message-text.ts";
 import {
   ActivityFeedPayload,
   AuthTestPayload,
   ConversationViewPayload,
+  FileInfoPayload,
   HistoryPayload,
   PostMessagePayload,
   SearchPayload,
@@ -78,6 +83,17 @@ export interface IdentityView {
   readonly workspace: string | undefined;
   readonly host: string;
   readonly credential: "session" | "bearer";
+}
+
+export interface FetchedFile {
+  readonly file: FileRow;
+  readonly bytes: Uint8Array;
+  readonly contentType: string | undefined;
+}
+
+export interface FileTextView {
+  readonly file: FileRow;
+  readonly text: string;
 }
 
 export type ReadError = SlackCallError | ChannelNotFound;
@@ -167,6 +183,10 @@ export class Slack extends Context.Service<
       limit: number
     ) => Effect.Effect<UsersView, SlackCallError>;
     readonly whoami: Effect.Effect<IdentityView, SlackCallError>;
+    /** One file's metadata and bytes, fetched with the session's credentials. */
+    readonly file: (id: string) => Effect.Effect<FetchedFile, SlackCallError>;
+    /** A canvas, transcript or text file as plain text. */
+    readonly fileText: (id: string) => Effect.Effect<FileTextView, SlackCallError>;
   }
 >()("slackcli/Slack") {
   static readonly layer: Layer.Layer<
@@ -520,7 +540,43 @@ export class Slack extends Context.Service<
         } satisfies IdentityView;
       })();
 
+      const fetchFile = Effect.fn("Slack.file")(function* (id: string) {
+        const info = yield* api.call(slackCall("files.info", { file: id }, FileInfoPayload));
+        const [row] = fileRows([info.file]);
+        const url = info.file.url_private_download ?? info.file.url_private;
+        if (row === undefined || url === undefined) {
+          return yield* new SlackResponseInvalid({
+            method: "files.info",
+            detail: `file ${id} has no download URL (mode: ${info.file.mode ?? "unknown"})`,
+          });
+        }
+
+        const downloaded = yield* api.download(url);
+        // Slack answers an unauthorised file request with its sign-in page, as
+        // a 200. Only a canvas is expected to be HTML.
+        const html = downloaded.contentType?.toLowerCase().includes("text/html") === true;
+        if (html && row.kind === "file" && row.mimetype?.includes("html") !== true) {
+          return yield* new SlackAuthExpired({
+            slackError: "the file download returned a sign-in page",
+          });
+        }
+
+        return {
+          file: row,
+          bytes: downloaded.bytes,
+          contentType: downloaded.contentType,
+        } satisfies FetchedFile;
+      });
+
+      const fileText = Effect.fn("Slack.fileText")(function* (id: string) {
+        const fetched = yield* fetchFile(id);
+        const raw = new TextDecoder().decode(fetched.bytes);
+        return { file: fetched.file, text: plainText(raw, fetched.contentType) } satisfies FileTextView;
+      });
+
       return {
+        file: fetchFile,
+        fileText,
         read,
         search,
         thread,
