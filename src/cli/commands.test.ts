@@ -42,3 +42,10 @@ test("file rejects a reference with no file id before it reads credentials", asy
   expect(result.exitCode).not.toBe(0);
   expect(result.stderr).toContain("Not a Slack file reference");
 });
+
+test("since rejects a value that is not a time before it reads credentials", async () => {
+  const result = await runCli(["since", "yesterday"]);
+
+  expect(result.exitCode).not.toBe(0);
+  expect(result.stderr).toContain("Not a time: yesterday");
+});

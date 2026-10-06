@@ -7,7 +7,12 @@ import type { ChannelNotFound, SlackCallError } from "../domain/errors.ts";
 import { fileKind, fileRows } from "../domain/files.ts";
 import type { FileRow } from "../domain/files.ts";
 import { plainText } from "../domain/file-text.ts";
-import { mentionedIds, messageText, slackTsToIso } from "../domain/message-text.ts";
+import {
+  mentionedIds,
+  messageText,
+  readableMessage,
+  slackTsToIso,
+} from "../domain/message-text.ts";
 import {
   ActivityFeedPayload,
   AuthTestPayload,
@@ -29,6 +34,7 @@ import {
   searchRows,
 } from "../domain/rows.ts";
 import type { ActivityTarget, MentionRow, MessageRow, SearchRow } from "../domain/rows.ts";
+import { searchDay } from "../domain/since.ts";
 import { permalink } from "../domain/thread-target.ts";
 import type { MessageTarget, ThreadTarget } from "../domain/thread-target.ts";
 import { ChannelDirectory } from "./channel-directory.ts";
@@ -111,6 +117,30 @@ export interface HuddleView {
   readonly missing: ReadonlyArray<string>;
 }
 
+/** One message in a `since` window, wherever it was found. */
+export interface SinceRow {
+  readonly channel: string;
+  readonly channelId: string;
+  /** The thread the message belongs to; the message's own link when it has none. */
+  readonly thread: string;
+  readonly url: string;
+  readonly author: string;
+  readonly authorId: string | undefined;
+  /** True for the signed-in user's own posts. */
+  readonly mine: boolean;
+  readonly at: string;
+  readonly message: string;
+  readonly files: ReadonlyArray<FileRow>;
+}
+
+export interface SinceView {
+  readonly since: string;
+  readonly until: string;
+  /** Rows dropped because the window held more than the limit; the oldest go first. */
+  readonly cut: number;
+  readonly rows: ReadonlyArray<SinceRow>;
+}
+
 export type ReadError = SlackCallError | ChannelNotFound;
 
 /** Notification kinds where someone addressed the user directly. */
@@ -161,6 +191,15 @@ const USERS_MAX_PAGES = 5;
 /** One page that covers a typical thread, so the cut happens locally. */
 const THREAD_PAGE = 200;
 
+/** Search pages read for the user's own posts; a hundred matches each. */
+const SINCE_SEARCH_PAGES = 5;
+/** Threads and DMs read for one `since` window, so a busy day stays bounded. */
+const SINCE_MAX_CONVERSATIONS = 80;
+const SINCE_FEED_ITEMS = 100;
+const SINCE_ACTIVITY_TYPES = [...MENTION_TYPES, "thread_v2", "dm"];
+
+const THREAD_TS_IN_LINK = /[?&]thread_ts=(\d{10}\.\d{6})/;
+
 export class Slack extends Context.Service<
   Slack,
   {
@@ -203,6 +242,8 @@ export class Slack extends Context.Service<
     /** A canvas, transcript or text file as plain text. */
     readonly fileText: (id: string) => Effect.Effect<FileTextView, SlackCallError>;
     readonly huddle: (target: ThreadTarget) => Effect.Effect<HuddleView, SlackCallError>;
+    /** Everything around the signed-in user since a Unix time, oldest first. */
+    readonly since: (sinceSeconds: number, limit: number) => Effect.Effect<SinceView, SlackCallError>;
   }
 >()("slackcli/Slack") {
   static readonly layer: Layer.Layer<
@@ -691,7 +732,175 @@ export class Slack extends Context.Service<
         } satisfies HuddleView;
       });
 
+      /**
+       * Everything a person needs to have read since a time, in one call: their
+       * own posts anywhere (from search), every message in the threads they
+       * posted in, were mentioned in or follow (from the activity feed), and
+       * their DMs. Each conversation is read once, whole from the window start,
+       * so nothing is clipped and replies by others come with it.
+       */
+      const since = Effect.fn("Slack.since")(function* (sinceSeconds: number, limit: number) {
+        const until = Date.now() / 1000;
+        const inWindow = (ts: string) => Number(ts) >= sinceSeconds;
+        const identity = yield* api.call(slackCall("auth.test", {}, AuthTestPayload));
+
+        const searchPage = (page: number) =>
+          api.call(
+            slackCall(
+              "search.messages",
+              {
+                query: `from:me after:${searchDay(sinceSeconds)}`,
+                count: 100,
+                page,
+                sort: "timestamp",
+                sort_dir: "desc",
+              },
+              SearchPayload
+            )
+          );
+
+        const ownPosts = Effect.gen(function* () {
+          const first = yield* searchPage(1);
+          const pages = Math.min(first.messages?.paging?.pages ?? 1, SINCE_SEARCH_PAGES);
+          const found = [...(first.messages?.matches ?? [])];
+          for (let page = 2; page <= pages; page += 1) {
+            const oldest = found.at(-1);
+            if (oldest === undefined || !inWindow(oldest.ts) || found.length >= limit) break;
+            const next = yield* searchPage(page);
+            found.push(...(next.messages?.matches ?? []));
+          }
+          yield* users.seed([
+            ...Object.values(first.users ?? {}),
+            ...Object.values(first.bots ?? {}),
+          ]);
+          return found.filter((match) => inWindow(match.ts));
+        });
+
+        const feed = api
+          .call(
+            slackCall(
+              "activity.feed",
+              feedParams(SINCE_FEED_ITEMS, SINCE_ACTIVITY_TYPES),
+              ActivityFeedPayload
+            )
+          )
+          .pipe(Effect.map((payload) => activityTargets(payload.items).filter((item) => inWindow(item.ts))));
+
+        const [posts, activity] = yield* Effect.all([ownPosts, feed], { concurrency: 2 });
+
+        // A conversation is a thread (channel + root) or a whole DM (channel only).
+        const threads = new Map<string, { readonly channel: string; readonly root: string }>();
+        const dms = new Set<string>();
+        const addThread = (channel: string | undefined, root: string) => {
+          if (channel !== undefined) threads.set(`${channel}:${root}`, { channel, root });
+        };
+        for (const post of posts) {
+          const root = THREAD_TS_IN_LINK.exec(post.permalink ?? "")?.[1] ?? post.ts;
+          addThread(post.channel?.id, root);
+        }
+        for (const item of activity) {
+          if (item.kind === "dm" || item.kind === "bot_dm_bundle") dms.add(item.channel);
+          else addThread(item.channel, item.threadTs ?? item.ts);
+        }
+
+        const readThread = (thread: { readonly channel: string; readonly root: string }) =>
+          api
+            .call(
+              slackCall(
+                "conversations.replies",
+                { channel: thread.channel, ts: thread.root, oldest: sinceSeconds, limit: THREAD_PAGE },
+                HistoryPayload
+              )
+            )
+            .pipe(
+              Effect.map((payload) =>
+                payload.messages.map((message) => ({ channel: thread.channel, root: thread.root, message }))
+              ),
+              // One thread the token cannot read must not lose the rest.
+              Effect.catch(() => Effect.succeed([]))
+            );
+
+        const readDm = (channel: string) =>
+          api
+            .call(
+              slackCall(
+                "conversations.history",
+                { channel, oldest: sinceSeconds, limit: THREAD_PAGE },
+                HistoryPayload
+              )
+            )
+            .pipe(
+              Effect.map((payload) =>
+                payload.messages.map((message) => ({
+                  channel,
+                  root: message.thread_ts ?? message.ts,
+                  message,
+                }))
+              ),
+              Effect.catch(() => Effect.succeed([]))
+            );
+
+        const conversations = [
+          ...[...threads.values()].map(readThread),
+          ...[...dms].map(readDm),
+        ].slice(0, SINCE_MAX_CONVERSATIONS);
+        const read = (yield* Effect.all(conversations, { concurrency: HYDRATE_CONCURRENCY })).flat();
+
+        // A post found by search and again in its thread is one message; the
+        // thread copy wins because it carries the files.
+        const found = new Map<
+          string,
+          { readonly channel: string; readonly root: string; readonly message: SlackMessage }
+        >();
+        for (const post of posts) {
+          const channel = post.channel?.id;
+          if (channel === undefined) continue;
+          const root = THREAD_TS_IN_LINK.exec(post.permalink ?? "")?.[1] ?? post.ts;
+          const { channel: _where, ...fields } = post;
+          found.set(`${channel}:${post.ts}`, {
+            channel,
+            root,
+            message: { ...fields, channel, user: post.user ?? identity.user_id },
+          });
+        }
+        for (const entry of read) {
+          if (inWindow(entry.message.ts)) found.set(`${entry.channel}:${entry.message.ts}`, entry);
+        }
+
+        const ordered = [...found.values()].sort(
+          (left, right) => Number(left.message.ts) - Number(right.message.ts)
+        );
+        const kept = ordered.slice(Math.max(0, ordered.length - limit));
+
+        const people = yield* users.names(kept.flatMap((entry) => peopleIds([entry.message])));
+        const workspace = yield* api.workspaceRef;
+        const channelNames = yield* channels.names;
+
+        return {
+          since: new Date(sinceSeconds * 1000).toISOString(),
+          until: new Date(until * 1000).toISOString(),
+          cut: ordered.length - kept.length,
+          rows: kept.map(({ channel, root, message }) => ({
+            channel: channelLabel(channel, channelNames),
+            channelId: channel,
+            thread: permalink(workspace, channel, root),
+            url: permalink(workspace, channel, message.ts, root),
+            author:
+              (message.user === undefined ? undefined : people.get(message.user)) ??
+              message.username ??
+              message.user ??
+              "Slack user",
+            authorId: message.user,
+            mine: message.user === identity.user_id,
+            at: slackTsToIso(message.ts),
+            message: readableMessage(message, people),
+            files: fileRows(message.files),
+          })),
+        } satisfies SinceView;
+      });
+
       return {
+        since,
         file: fetchFile,
         fileText,
         huddle,

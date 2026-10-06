@@ -1,5 +1,5 @@
 import type { MentionRow, MessageRow, SearchRow } from "../domain/rows.ts";
-import type { HuddleView } from "../services/slack.ts";
+import type { HuddleView, SinceView } from "../services/slack.ts";
 
 export interface Paint {
   readonly dim: (value: string) => string;
@@ -239,4 +239,33 @@ export const renderHuddle = (view: HuddleView, options: RenderOptions): string =
     section("AI notes", view.notes, "AI notes"),
     section("Transcript", view.transcript, "transcript"),
   ].join("\n\n");
+};
+
+/**
+ * `since` exists so nothing the user said is missed, so it never clamps. Each
+ * row names its channel and thread; the user's own posts carry a mark.
+ */
+export const renderSince = (view: SinceView, options: RenderOptions): string => {
+  const { paint } = options;
+  const header = paint.dim(
+    `since ${view.since}: ${view.rows.length} messages` +
+      (view.cut > 0 ? `, ${view.cut} older messages cut (raise --limit)` : "")
+  );
+  if (view.rows.length === 0) return header;
+
+  const columns = columnsFor(view.rows, options.now);
+  const rows = view.rows.flatMap((row) => [
+    line(
+      paint,
+      {
+        mark: row.mine ? paint.accent("›") : " ",
+        time: clock(row.at, options.now),
+        author: row.author,
+        message: tidy(row.message),
+      },
+      columns
+    ),
+    paint.dim(`   ${row.channel}  ${row.url}`),
+  ]);
+  return [header, ...rows].join("\n");
 };

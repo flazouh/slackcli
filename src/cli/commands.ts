@@ -4,6 +4,7 @@ import { FetchHttpClient } from "effect/unstable/http";
 
 import { WriteNotConfirmed } from "../domain/errors.ts";
 import { parseFileTarget } from "../domain/file-text.ts";
+import { parseSince } from "../domain/since.ts";
 import { parseMessageTarget, parseThreadTarget } from "../domain/thread-target.ts";
 import { ChannelDirectory } from "../services/channel-directory.ts";
 import { writeSession } from "../services/credentials.ts";
@@ -15,6 +16,7 @@ import {
   renderMentions,
   renderMessages,
   renderSearch,
+  renderSince,
 } from "./render.ts";
 import type { RenderOptions } from "./render.ts";
 
@@ -166,6 +168,35 @@ const huddle = Command.make(
   })
 ).pipe(
   Command.withDescription("Show a huddle: who attended, how long, its AI notes and its transcript")
+);
+
+const since = Command.make(
+  "since",
+  {
+    when: Argument.string("when").pipe(
+      Argument.withDescription("A duration back from now (3h, 90m, 1d) or an ISO time")
+    ),
+    limit: Flag.integer("limit").pipe(
+      Flag.withAlias("n"),
+      Flag.filterMap(
+        (value) => (value > 0 ? Option.some(value) : Option.none()),
+        () => "Expected a positive item limit"
+      ),
+      Flag.withDefault(500),
+      Flag.withDescription("Maximum messages to return; the newest are kept")
+    ),
+    json,
+  },
+  Effect.fn("since")(function* (config) {
+    const start = yield* Effect.fromResult(parseSince(config.when, new Date()));
+    const slack = yield* Slack;
+    const view = yield* slack.since(start, config.limit);
+    yield* show(view, config.json, () => renderSince(view, layout({ full: true })));
+  })
+).pipe(
+  Command.withDescription(
+    "Everything around you since a time, in full: your posts, replies in your threads, mentions, DMs"
+  )
 );
 
 /** Both activity commands read the same feed; they differ only in what it filters to. */
@@ -429,6 +460,7 @@ export const slackcli = Command.make("slackcli", {}).pipe(
     search,
     thread,
     huddle,
+    since,
     mentions,
     inbox,
     send,
