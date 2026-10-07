@@ -311,6 +311,9 @@ export type ActivityItem = typeof ActivityItem.Type;
 
 export const ActivityFeedPayload = Schema.Struct({
   items: Schema.Array(ActivityItem),
+  response_metadata: Schema.optionalKey(
+    Schema.Struct({ next_cursor: Schema.optionalKey(Schema.String) })
+  ),
 });
 
 export const displayName = (user: SlackUser): string =>
