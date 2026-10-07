@@ -23,7 +23,13 @@ import {
   SearchPayload,
   UsersListPayload,
 } from "../domain/slack-schema.ts";
-import type { ActivityItem, SlackFile, SlackMessage, SlackUser } from "../domain/slack-schema.ts";
+import type {
+  ActivityItem,
+  SearchMatch,
+  SlackFile,
+  SlackMessage,
+  SlackUser,
+} from "../domain/slack-schema.ts";
 import {
   activityPeopleIds,
   activityTargets,
@@ -191,11 +197,15 @@ export interface ActivityOptions {
 const USERS_PAGE = 1000;
 const USERS_MAX_PAGES = 5;
 
+/**
+ * Matches asked for per search page. Every page asks for the same count,
+ * because Slack numbers its pages by it; a session token may still get fewer.
+ */
+const SEARCH_PAGE = 100;
+const SEARCH_MAX_PAGES = 50;
 /** One page that covers a typical thread, so the cut happens locally. */
 const THREAD_PAGE = 200;
 
-/** Search pages read for the user's own posts; a hundred matches each. */
-const SINCE_SEARCH_PAGES = 5;
 /** Threads and DMs read for one `since` window, so a busy day stays bounded. */
 const SINCE_MAX_CONVERSATIONS = 80;
 /** Feed items read for one `since` window: about two weeks of a busy feed. */
@@ -305,22 +315,45 @@ export class Slack extends Context.Service<
         } satisfies ChannelView;
       });
 
-      const search = Effect.fn("Slack.search")(function* (query: string, limit: number) {
-        const found = yield* api.call(
+      const searchPage = (query: string, page: number) =>
+        api.call(
           slackCall(
             "search.messages",
-            { query, count: limit, sort: "timestamp", sort_dir: "desc" },
+            { query, count: SEARCH_PAGE, page, sort: "timestamp", sort_dir: "desc" },
             SearchPayload
           )
         );
 
-        const payloadUsers = [
-          ...Object.values(found.users ?? {}),
-          ...Object.values(found.bots ?? {}),
-        ];
-        yield* users.seed(payloadUsers);
+      /**
+       * Slack answers search one page per call, and a session token gets at
+       * most 20 matches a page whatever `count` asks for. Pages are read
+       * until `limit` matches are in hand, Slack has no more, or `stopAt`
+       * says the newest-first matches went past what the caller needs.
+       */
+      const searchMatches = Effect.fnUntraced(function* (
+        query: string,
+        limit: number,
+        stopAt: (oldest: SearchMatch) => boolean = () => false
+      ) {
+        const matches: Array<SearchMatch> = [];
+        let total: number | undefined;
+        let pages = 1;
+        for (let page = 1; page <= Math.min(pages, SEARCH_MAX_PAGES); page += 1) {
+          const found = yield* searchPage(query, page);
+          const more = found.messages?.matches ?? [];
+          total ??= found.messages?.total;
+          pages = found.messages?.paging?.pages ?? pages;
+          matches.push(...more);
+          yield* users.seed([...Object.values(found.users ?? {}), ...Object.values(found.bots ?? {})]);
+          const oldest = matches.at(-1);
+          if (more.length === 0 || matches.length >= limit) break;
+          if (oldest !== undefined && stopAt(oldest)) break;
+        }
+        return { total, matches: matches.slice(0, limit) };
+      });
 
-        const matches = found.messages?.matches ?? [];
+      const search = Effect.fn("Slack.search")(function* (query: string, limit: number) {
+        const { total, matches } = yield* searchMatches(query, limit);
         const people = yield* users.names(
           matches.flatMap((match) => [
             ...(match.user === undefined ? [] : [match.user]),
@@ -329,7 +362,7 @@ export class Slack extends Context.Service<
         );
 
         return {
-          total: found.messages?.total,
+          total,
           rows: searchRows(matches, { people }),
         } satisfies SearchView;
       });
@@ -777,37 +810,11 @@ export class Slack extends Context.Service<
         const inWindow = (ts: string) => Number(ts) >= sinceSeconds;
         const identity = yield* api.call(slackCall("auth.test", {}, AuthTestPayload));
 
-        const searchPage = (page: number) =>
-          api.call(
-            slackCall(
-              "search.messages",
-              {
-                query: `from:me after:${searchDay(sinceSeconds)}`,
-                count: 100,
-                page,
-                sort: "timestamp",
-                sort_dir: "desc",
-              },
-              SearchPayload
-            )
-          );
-
-        const ownPosts = Effect.gen(function* () {
-          const first = yield* searchPage(1);
-          const pages = Math.min(first.messages?.paging?.pages ?? 1, SINCE_SEARCH_PAGES);
-          const found = [...(first.messages?.matches ?? [])];
-          for (let page = 2; page <= pages; page += 1) {
-            const oldest = found.at(-1);
-            if (oldest === undefined || !inWindow(oldest.ts) || found.length >= limit) break;
-            const next = yield* searchPage(page);
-            found.push(...(next.messages?.matches ?? []));
-          }
-          yield* users.seed([
-            ...Object.values(first.users ?? {}),
-            ...Object.values(first.bots ?? {}),
-          ]);
-          return found.filter((match) => inWindow(match.ts));
-        });
+        const ownPosts = searchMatches(
+          `from:me after:${searchDay(sinceSeconds)}`,
+          SEARCH_PAGE * SEARCH_MAX_PAGES,
+          (oldest) => !inWindow(oldest.ts)
+        ).pipe(Effect.map(({ matches }) => matches.filter((match) => inWindow(match.ts))));
 
         const feed = readFeed(SINCE_FEED_ITEMS, SINCE_ACTIVITY_TYPES, sinceSeconds).pipe(
           Effect.map((items) => activityTargets(items).filter((item) => inWindow(item.ts)))
