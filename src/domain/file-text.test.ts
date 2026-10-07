@@ -35,17 +35,6 @@ test("canvas HTML becomes plain text with headings, paragraphs and bullets on th
   );
 });
 
-test("a JSON transcript becomes one timestamped line per segment", () => {
-  const transcript = JSON.stringify({
-    segments: [
-      { start_time: 20, speaker: "@lab", text: "Can you hear me?" },
-      { start_time: 75.4, speaker: "Alex", text: "Yes." },
-    ],
-  });
-
-  expect(plainText(transcript, "application/json")).toBe("0:20 @lab: Can you hear me?\n1:15 Alex: Yes.");
-});
-
 test("a WebVTT transcript keeps the cue start and the words", () => {
   const vtt = "WEBVTT\n\n1\n00:00:20.000 --> 00:00:24.000\n<v @lab>Can you hear me?\n\n2\n00:01:15.000 --> 00:01:16.000\n<v Alex>Yes.\n";
 

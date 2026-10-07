@@ -649,6 +649,34 @@ test("saving a huddle transcript writes its text, because its download URL serve
   expect(fetched.contentType).toBe("text/plain; charset=utf-8");
 });
 
+test("an uploaded file titled transcript is still downloaded, not read as a huddle transcript", async () => {
+  const api = stubApi(
+    {
+      "files.info": [
+        {
+          ok: true,
+          file: {
+            id: "F9",
+            title: "Meeting transcript",
+            filetype: "text",
+            url_private: "https://files.slack.com/files-pri/T1-F9/meeting.txt",
+          },
+        },
+      ],
+    },
+    {
+      "https://files.slack.com/files-pri/T1-F9/meeting.txt": {
+        body: "We met.\n",
+        contentType: "text/plain",
+      },
+    }
+  );
+
+  const view = await run((slack) => slack.fileText("F9"), api);
+
+  expect(view.text).toBe("We met.");
+});
+
 test("a transcript Slack returns without its lines fails instead of saving the web app page", async () => {
   const { huddle_transcription: _lines, ...withoutLines } = transcriptFile("F0C7JKZ6F26");
   const api = stubApi({ "files.info": [{ ok: true, file: withoutLines }] });
