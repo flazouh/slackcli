@@ -227,8 +227,16 @@ export const renderHuddle = (view: HuddleView, options: RenderOptions): string =
       : `Duration: ${duration(view.durationSeconds)}`,
   ];
 
-  const section = (label: string, part: HuddleView["notes"], missingKey: string): string => {
-    if (part !== undefined) return `${paint.bold(`${label} (${part.file.id})`)}\n${part.text}`;
+  const section = (
+    label: string,
+    part: HuddleView["notes"] | HuddleView["transcript"],
+    missingKey: string
+  ): string => {
+    if (part !== undefined) {
+      const count =
+        "lines" in part ? `, ${part.lines.length} ${part.lines.length === 1 ? "line" : "lines"}` : "";
+      return `${paint.bold(`${label} (${part.file.id}${count})`)}\n${part.text}`;
+    }
     const reason = view.missing.find((entry) => entry.startsWith(missingKey));
     const detail = reason === undefined || reason === missingKey ? "none in this thread" : reason;
     return paint.bold(`${label}: ${detail}`);

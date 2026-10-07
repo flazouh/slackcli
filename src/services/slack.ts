@@ -42,6 +42,14 @@ import {
 import type { ActivityTarget, MentionRow, MessageRow, SearchRow } from "../domain/rows.ts";
 import { searchDay } from "../domain/since.ts";
 import { permalink } from "../domain/thread-target.ts";
+import {
+  mentionedUserIds,
+  resolveMentions,
+  transcriptLines,
+  transcriptSpeakerIds,
+  transcriptText,
+} from "../domain/transcript.ts";
+import type { TranscriptLine } from "../domain/transcript.ts";
 import type { MessageTarget, ThreadTarget } from "../domain/thread-target.ts";
 import { ChannelDirectory } from "./channel-directory.ts";
 import { SlackApi, slackCall } from "./slack-api.ts";
@@ -108,6 +116,11 @@ export interface FileTextView {
   readonly text: string;
 }
 
+/** A huddle transcript: `text` holds one `[mm:ss] Name: text` line per entry in `lines`. */
+export interface TranscriptView extends FileTextView {
+  readonly lines: ReadonlyArray<TranscriptLine>;
+}
+
 export interface HuddleView {
   readonly channel: string;
   readonly url: string;
@@ -118,7 +131,7 @@ export interface HuddleView {
   readonly durationSeconds: number | undefined;
   readonly ended: boolean;
   readonly notes: FileTextView | undefined;
-  readonly transcript: FileTextView | undefined;
+  readonly transcript: TranscriptView | undefined;
   /** "AI notes" and "transcript" when absent, with the reason when a download failed. */
   readonly missing: ReadonlyArray<string>;
 }
@@ -663,10 +676,30 @@ export class Slack extends Context.Service<
         } satisfies IdentityView;
       })();
 
+      // `include_transcription` is what the web client sends to read a huddle
+      // transcript; other files ignore it.
       const fileInfo = (id: string) =>
         api
-          .call(slackCall("files.info", { file: id }, FileInfoPayload))
+          .call(slackCall("files.info", { file: id, include_transcription: true }, FileInfoPayload))
           .pipe(Effect.map((payload) => payload.file));
+
+      /**
+       * A transcript's download URL redirects to the web app, so its text comes
+       * only from the `huddle_transcription` lines that `files.info` returns.
+       */
+      const transcriptOf = Effect.fn("Slack.transcriptOf")(function* (file: SlackFile) {
+        const [row] = fileRows([file]);
+        const transcription = file.huddle_transcription;
+        if (row === undefined || transcription === undefined) {
+          return yield* new SlackResponseInvalid({
+            method: "files.info",
+            detail: `file ${file.id} came back without its transcript lines`,
+          });
+        }
+        const people = yield* users.names(transcriptSpeakerIds(transcription));
+        const lines = transcriptLines(transcription, people);
+        return { file: row, text: transcriptText(lines), lines } satisfies TranscriptView;
+      });
 
       const downloadFile = Effect.fn("Slack.downloadFile")(function* (file: SlackFile) {
         const [row] = fileRows([file]);
@@ -695,15 +728,24 @@ export class Slack extends Context.Service<
         } satisfies FetchedFile;
       });
 
-      const fetchFile = (id: string) => fileInfo(id).pipe(Effect.flatMap(downloadFile));
+      const fetchFile = Effect.fn("Slack.fetchFile")(function* (id: string) {
+        const file = yield* fileInfo(id);
+        if (fileKind(file) !== "transcript") return yield* downloadFile(file);
+        const transcript = yield* transcriptOf(file);
+        return {
+          file: transcript.file,
+          bytes: new TextEncoder().encode(`${transcript.text}\n`),
+          contentType: "text/plain; charset=utf-8",
+        } satisfies FetchedFile;
+      });
 
-      const textOf = (file: SlackFile) =>
-        downloadFile(file).pipe(
-          Effect.map((fetched) => {
-            const raw = new TextDecoder().decode(fetched.bytes);
-            return { file: fetched.file, text: plainText(raw, fetched.contentType) } satisfies FileTextView;
-          })
-        );
+      const textOf = Effect.fn("Slack.textOf")(function* (file: SlackFile) {
+        if (fileKind(file) === "transcript") return yield* transcriptOf(file);
+        const fetched = yield* downloadFile(file);
+        const text = plainText(new TextDecoder().decode(fetched.bytes), fetched.contentType);
+        const people = yield* users.names(mentionedUserIds(text));
+        return { file: fetched.file, text: resolveMentions(text, people) } satisfies FileTextView;
+      });
 
       const fileText = (id: string) => fileInfo(id).pipe(Effect.flatMap(textOf));
 
@@ -758,16 +800,26 @@ export class Slack extends Context.Service<
         const canvases = files.filter((file) => fileKind(file) === "canvas");
         const notesFile =
           canvases.find((file) => /huddle notes/i.test(file.title ?? file.name ?? "")) ?? canvases[0];
-        const transcriptFile = files.find((file) => fileKind(file) === "transcript");
+        // A notes canvas names its transcript even when the thread does not attach it.
+        const linkedTranscript = notesFile?.huddle_transcript_file_id;
+        const transcriptFile =
+          files.find((file) => fileKind(file) === "transcript") ??
+          (linkedTranscript === undefined
+            ? undefined
+            : yield* fileInfo(linkedTranscript).pipe(Effect.catch(() => Effect.succeed(undefined))));
 
         const missing: Array<string> = [];
-        const read = (file: SlackFile | undefined, label: string) =>
+        const read = <A>(
+          file: SlackFile | undefined,
+          label: string,
+          readText: (file: SlackFile) => Effect.Effect<A, SlackCallError>
+        ) =>
           file === undefined
             ? Effect.sync(() => {
                 missing.push(label);
                 return undefined;
               })
-            : textOf(file).pipe(
+            : readText(file).pipe(
                 Effect.catch((error: SlackCallError) =>
                   Effect.sync(() => {
                     missing.push(`${label} (${explain(error) ?? error._tag})`);
@@ -776,8 +828,8 @@ export class Slack extends Context.Service<
                 )
               );
 
-        const notes = yield* read(notesFile, "AI notes");
-        const transcript = yield* read(transcriptFile, "transcript");
+        const notes = yield* read(notesFile, "AI notes", textOf);
+        const transcript = yield* read(transcriptFile, "transcript", transcriptOf);
         const attendeeIds = room?.participant_history ?? room?.participants ?? [];
         const people = yield* users.names(attendeeIds);
 

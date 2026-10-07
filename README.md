@@ -92,6 +92,15 @@ Message rows carry a `files` array (id, kind, name, title, filetype, mimetype,
 size, permalink). A file-only message reads `[file] shot.png (image/png, 412 KB)`;
 canvases and huddle transcripts show as `[canvas]` and `[transcript]`.
 
+A huddle transcript prints one `[mm:ss] Name: text` line per spoken line, in
+order, with the speaker resolved to a name. Its `--json` form adds a `lines`
+array (`at`, `offsetSeconds`, `speakerId`, `speaker`, `text`). Slack serves the
+transcript's download URL as its web app, so slackcli reads the lines from
+`files.info` with `include_transcription`, as the web client does; saving a
+transcript with `file` writes that text. `huddle` finds the transcript through
+the AI notes canvas when the thread does not attach it, and user mentions in
+canvas text read as `@name` instead of `@U0123ABCD`.
+
 `since` takes a duration (`3h`, `90m`, `1d`) or an ISO time. It finds your own
 posts through search, so a post made in the last few seconds can be missing
 until Slack indexes it. It keeps the newest `--limit` messages (default 500)
