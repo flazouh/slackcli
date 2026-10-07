@@ -70,6 +70,29 @@ export const Attachment = Schema.Struct({
  * transcript. Only `id` is certain; a file Slack hides from this token
  * (`mode: "hidden_by_limit"`, `"tombstone"`) arrives with little else.
  */
+/**
+ * One spoken line of a huddle transcript. `start_time_ms` counts from the start
+ * of the huddle; `user_id` is absent when Slack could not tell who spoke.
+ */
+export const HuddleTranscriptLine = Schema.Struct({
+  contents: Schema.String,
+  start_time_ms: Schema.Number,
+  user_id: Schema.optionalKey(Schema.String),
+});
+export type HuddleTranscriptLine = typeof HuddleTranscriptLine.Type;
+
+/**
+ * What `files.info` returns for a huddle transcript when asked with
+ * `include_transcription`. The file's download URL only serves the web app, so
+ * this is the one place the transcript text exists.
+ */
+export const HuddleTranscription = Schema.Struct({
+  lines: Schema.Array(HuddleTranscriptLine),
+  date_start: Schema.optionalKey(Schema.Number),
+  date_end: Schema.optionalKey(Schema.Number),
+});
+export type HuddleTranscription = typeof HuddleTranscription.Type;
+
 export const SlackFile = Schema.Struct({
   id: Schema.String,
   name: Schema.optionalKey(Schema.String),
@@ -82,6 +105,9 @@ export const SlackFile = Schema.Struct({
   permalink: Schema.optionalKey(Schema.String),
   url_private: Schema.optionalKey(Schema.String),
   url_private_download: Schema.optionalKey(Schema.String),
+  /** Set on a huddle notes canvas: the transcript it was written from. */
+  huddle_transcript_file_id: Schema.optionalKey(Schema.String),
+  huddle_transcription: Schema.optionalKey(HuddleTranscription),
 }).annotate({ identifier: "SlackFile" });
 export type SlackFile = typeof SlackFile.Type;
 

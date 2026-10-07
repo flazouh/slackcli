@@ -72,78 +72,6 @@ const line = (at: number | undefined, speaker: string | undefined, text: string)
     .filter((part): part is string => part !== undefined)
     .join(" ");
 
-const TIME_KEYS = ["start_time", "start", "startTime", "offset", "time"] as const;
-const SPEAKER_KEYS = ["speaker", "speaker_name", "user_name", "name", "user", "user_id"] as const;
-
-type Json = null | boolean | number | string | ReadonlyArray<Json> | { readonly [key: string]: Json };
-
-const isRecord = (value: Json): value is { readonly [key: string]: Json } =>
-  typeof value === "object" && value !== null && !Array.isArray(value);
-
-const firstNumber = (record: { readonly [key: string]: Json }): number | undefined => {
-  for (const key of TIME_KEYS) {
-    const value = record[key];
-    if (typeof value === "number") return value;
-    if (typeof value === "string" && value.trim() !== "" && !Number.isNaN(Number(value))) {
-      return Number(value);
-    }
-  }
-  return undefined;
-};
-
-const firstString = (record: { readonly [key: string]: Json }): string | undefined => {
-  for (const key of SPEAKER_KEYS) {
-    const value = record[key];
-    if (typeof value === "string" && value !== "") return value;
-  }
-  return undefined;
-};
-
-/**
- * Slack does not document the transcript format, so the JSON is read by shape:
- * the first array whose items carry `text` is the list of segments, and each
- * segment's time and speaker are taken from whichever usual key it has.
- */
-const segments = (value: Json): ReadonlyArray<string> | undefined => {
-  if (Array.isArray(value)) {
-    const items = value.filter(isRecord);
-    if (items.length > 0 && items.every((item) => typeof item["text"] === "string")) {
-      return items.map((item) => line(firstNumber(item), firstString(item), String(item["text"]).trim()));
-    }
-    for (const item of value) {
-      const found = segments(item);
-      if (found !== undefined) return found;
-    }
-    return undefined;
-  }
-  if (isRecord(value)) {
-    for (const child of Object.values(value)) {
-      const found = segments(child);
-      if (found !== undefined) return found;
-    }
-  }
-  return undefined;
-};
-
-const allTexts = (value: Json): ReadonlyArray<string> => {
-  if (Array.isArray(value)) return value.flatMap(allTexts);
-  if (!isRecord(value)) return [];
-  return Object.entries(value).flatMap(([key, child]) =>
-    key === "text" && typeof child === "string" ? [child] : allTexts(child)
-  );
-};
-
-const jsonText = (raw: string): string | undefined => {
-  let parsed: Json;
-  try {
-    parsed = JSON.parse(raw) as Json;
-  } catch {
-    return undefined;
-  }
-  const found = segments(parsed) ?? allTexts(parsed);
-  return found.join("\n").trim();
-};
-
 const CUE = /^(?:(\d+):)?(\d{1,2}):(\d{2})[.,]\d{3}\s+-->/;
 
 const vttText = (raw: string): string => {
@@ -175,10 +103,6 @@ export const plainText = (raw: string, contentType: string | undefined): string 
   const type = (contentType ?? "").toLowerCase();
   const body = raw.trimStart();
   if (type.includes("vtt") || body.startsWith("WEBVTT")) return vttText(raw);
-  if (type.includes("json") || body.startsWith("{") || body.startsWith("[")) {
-    const text = jsonText(raw);
-    if (text !== undefined) return text;
-  }
   if (type.includes("html") || /^<(!doctype|html|body|div|p|h1)\b/i.test(body)) return htmlText(raw);
   return raw.trim();
 };

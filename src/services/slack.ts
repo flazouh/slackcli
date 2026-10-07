@@ -2,11 +2,10 @@ import { randomUUID } from "node:crypto";
 
 import { Context, Effect, Layer } from "effect";
 
-import { explain, SlackAuthExpired, SlackResponseInvalid } from "../domain/errors.ts";
+import { explain } from "../domain/errors.ts";
 import type { ChannelNotFound, SlackCallError } from "../domain/errors.ts";
-import { fileKind, fileRows } from "../domain/files.ts";
+import { fileKind, fileRows, isHuddleTranscript } from "../domain/files.ts";
 import type { FileRow } from "../domain/files.ts";
-import { plainText } from "../domain/file-text.ts";
 import {
   mentionedIds,
   messageText,
@@ -17,7 +16,6 @@ import {
   ActivityFeedPayload,
   AuthTestPayload,
   ConversationViewPayload,
-  FileInfoPayload,
   HistoryPayload,
   PostMessagePayload,
   SearchPayload,
@@ -44,6 +42,8 @@ import { searchDay } from "../domain/since.ts";
 import { permalink } from "../domain/thread-target.ts";
 import type { MessageTarget, ThreadTarget } from "../domain/thread-target.ts";
 import { ChannelDirectory } from "./channel-directory.ts";
+import { fileReader } from "./slack-files.ts";
+import type { FetchedFile, FileTextView, TranscriptView } from "./slack-files.ts";
 import { SlackApi, slackCall } from "./slack-api.ts";
 import { UserDirectory } from "./user-directory.ts";
 
@@ -97,17 +97,6 @@ export interface IdentityView {
   readonly credential: "session" | "bearer";
 }
 
-export interface FetchedFile {
-  readonly file: FileRow;
-  readonly bytes: Uint8Array;
-  readonly contentType: string | undefined;
-}
-
-export interface FileTextView {
-  readonly file: FileRow;
-  readonly text: string;
-}
-
 export interface HuddleView {
   readonly channel: string;
   readonly url: string;
@@ -118,7 +107,7 @@ export interface HuddleView {
   readonly durationSeconds: number | undefined;
   readonly ended: boolean;
   readonly notes: FileTextView | undefined;
-  readonly transcript: FileTextView | undefined;
+  readonly transcript: TranscriptView | undefined;
   /** "AI notes" and "transcript" when absent, with the reason when a download failed. */
   readonly missing: ReadonlyArray<string>;
 }
@@ -663,49 +652,7 @@ export class Slack extends Context.Service<
         } satisfies IdentityView;
       })();
 
-      const fileInfo = (id: string) =>
-        api
-          .call(slackCall("files.info", { file: id }, FileInfoPayload))
-          .pipe(Effect.map((payload) => payload.file));
-
-      const downloadFile = Effect.fn("Slack.downloadFile")(function* (file: SlackFile) {
-        const [row] = fileRows([file]);
-        const url = file.url_private_download ?? file.url_private;
-        if (row === undefined || url === undefined) {
-          return yield* new SlackResponseInvalid({
-            method: "files.info",
-            detail: `file ${file.id} has no download URL (mode: ${file.mode ?? "unknown"})`,
-          });
-        }
-
-        const downloaded = yield* api.download(url);
-        // Slack answers an unauthorised file request with its sign-in page, as
-        // a 200. Only a canvas is expected to be HTML.
-        const html = downloaded.contentType?.toLowerCase().includes("text/html") === true;
-        if (html && row.kind === "file" && row.mimetype?.includes("html") !== true) {
-          return yield* new SlackAuthExpired({
-            slackError: "the file download returned a sign-in page",
-          });
-        }
-
-        return {
-          file: row,
-          bytes: downloaded.bytes,
-          contentType: downloaded.contentType,
-        } satisfies FetchedFile;
-      });
-
-      const fetchFile = (id: string) => fileInfo(id).pipe(Effect.flatMap(downloadFile));
-
-      const textOf = (file: SlackFile) =>
-        downloadFile(file).pipe(
-          Effect.map((fetched) => {
-            const raw = new TextDecoder().decode(fetched.bytes);
-            return { file: fetched.file, text: plainText(raw, fetched.contentType) } satisfies FileTextView;
-          })
-        );
-
-      const fileText = (id: string) => fileInfo(id).pipe(Effect.flatMap(textOf));
+      const { fileInfo, fetchFile, fileText, textOf, transcriptOf } = fileReader(api, users);
 
       /**
        * A huddle posts one message in its channel and carries its notes canvas
@@ -758,16 +705,26 @@ export class Slack extends Context.Service<
         const canvases = files.filter((file) => fileKind(file) === "canvas");
         const notesFile =
           canvases.find((file) => /huddle notes/i.test(file.title ?? file.name ?? "")) ?? canvases[0];
-        const transcriptFile = files.find((file) => fileKind(file) === "transcript");
+        // A notes canvas names its transcript even when the thread does not attach it.
+        const linkedTranscript = notesFile?.huddle_transcript_file_id;
+        const transcriptFile =
+          files.find(isHuddleTranscript) ??
+          (linkedTranscript === undefined
+            ? undefined
+            : yield* fileInfo(linkedTranscript).pipe(Effect.catch(() => Effect.succeed(undefined))));
 
         const missing: Array<string> = [];
-        const read = (file: SlackFile | undefined, label: string) =>
+        const read = <A>(
+          file: SlackFile | undefined,
+          label: string,
+          readText: (file: SlackFile) => Effect.Effect<A, SlackCallError>
+        ) =>
           file === undefined
             ? Effect.sync(() => {
                 missing.push(label);
                 return undefined;
               })
-            : textOf(file).pipe(
+            : readText(file).pipe(
                 Effect.catch((error: SlackCallError) =>
                   Effect.sync(() => {
                     missing.push(`${label} (${explain(error) ?? error._tag})`);
@@ -776,8 +733,8 @@ export class Slack extends Context.Service<
                 )
               );
 
-        const notes = yield* read(notesFile, "AI notes");
-        const transcript = yield* read(transcriptFile, "transcript");
+        const notes = yield* read(notesFile, "AI notes", textOf);
+        const transcript = yield* read(transcriptFile, "transcript", transcriptOf);
         const attendeeIds = room?.participant_history ?? room?.participants ?? [];
         const people = yield* users.names(attendeeIds);
 

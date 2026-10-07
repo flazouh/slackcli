@@ -54,7 +54,8 @@ test("a huddle prints attendees, duration, notes and transcript, and names what 
           size: undefined,
           permalink: undefined,
         },
-        text: "0:20 @lab: Hi",
+        text: "[00:20] Lab: Hi",
+        lines: [{ at: "00:20", offsetSeconds: 20, speakerId: "U2", speaker: "Lab", text: "Hi" }],
       },
       missing: ["AI notes"],
     },
@@ -64,7 +65,7 @@ test("a huddle prints attendees, duration, notes and transcript, and names what 
   expect(output).toContain("Attended: Alex, Lab");
   expect(output).toContain("Duration: 42 min");
   expect(output).toContain("AI notes: none in this thread");
-  expect(output).toContain("Transcript (F0C73ERJ2LW)\n0:20 @lab: Hi");
+  expect(output).toContain("Transcript (F0C73ERJ2LW, 1 line)\n[00:20] Lab: Hi");
 });
 
 test("since prints every row in full with its channel, and marks the user's own posts", () => {

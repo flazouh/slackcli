@@ -512,6 +512,29 @@ const huddleRoot = (files: ReadonlyArray<string>) => ({
   },
 });
 
+const transcriptFile = (id: string) => ({
+  id,
+  title: "Huddle transcript",
+  filetype: "huddle_transcript",
+  mimetype: "application/vnd.slack-huddle-transcript",
+  url_private: `https://files.slack.com/files-pri/T1-${id}/huddle_transcript`,
+  huddle_transcription: {
+    date_start: 1791301348,
+    lines: [
+      { contents: "Ship the hook today.", start_time_ms: 172_000, user_id: "U2", line_id: "b" },
+      { contents: "Morning all.", start_time_ms: 14_000, user_id: "U1", line_id: "a" },
+    ],
+  },
+});
+
+const notesCanvas = (id: string, transcriptId?: string) => ({
+  id,
+  title: "Huddle notes: 10/6/26 in #proj-ori",
+  filetype: "quip",
+  url_private: `https://files.slack.com/files-pri/T1-${id}/canvas`,
+  ...(transcriptId === undefined ? {} : { huddle_transcript_file_id: transcriptId }),
+});
+
 test("huddle prints attendees, duration, the AI notes and the transcript of a huddle thread", async () => {
   const api = stubApi(
     {
@@ -520,55 +543,23 @@ test("huddle prints attendees, duration, the AI notes and the transcript of a hu
           ok: true,
           messages: [
             huddleRoot(["F0C77BN7ZJ5", "F0C73ERJ2LW"]),
-            {
-              ts: "1791303900.000100",
-              user: "U1",
-              text: "",
-              files: [
-                {
-                  id: "F0C77BN7ZJ5",
-                  title: "Huddle notes: 10/6/26 in #proj-ori",
-                  filetype: "quip",
-                  url_private: "https://files.slack.com/files-pri/T1-F0C77BN7ZJ5/canvas",
-                },
-              ],
-            },
+            { ts: "1791303900.000100", user: "U1", text: "", files: [notesCanvas("F0C77BN7ZJ5")] },
           ],
         },
       ],
       "files.info": [
-        {
-          ok: true,
-          file: {
-            id: "F0C77BN7ZJ5",
-            title: "Huddle notes: 10/6/26 in #proj-ori",
-            filetype: "quip",
-            url_private: "https://files.slack.com/files-pri/T1-F0C77BN7ZJ5/canvas",
-          },
-        },
-        {
-          ok: true,
-          file: {
-            id: "F0C73ERJ2LW",
-            title: "Huddle transcript",
-            filetype: "huddle_transcript",
-            url_private: "https://files.slack.com/files-pri/T1-F0C73ERJ2LW/huddle_transcript",
-          },
-        },
+        { ok: true, file: notesCanvas("F0C77BN7ZJ5") },
+        { ok: true, file: transcriptFile("F0C73ERJ2LW") },
       ],
       "users.info": [
-        { ok: true, user: { id: "U1", real_name: "Alex" } },
         { ok: true, user: { id: "U2", real_name: "Lab" } },
+        { ok: true, user: { id: "U1", real_name: "Alex" } },
       ],
     },
     {
       "https://files.slack.com/files-pri/T1-F0C77BN7ZJ5/canvas": {
         body: "<h1>Summary</h1><p>Ship the hook.</p>",
         contentType: "text/html",
-      },
-      "https://files.slack.com/files-pri/T1-F0C73ERJ2LW/huddle_transcript": {
-        body: JSON.stringify({ segments: [{ start_time: 20, speaker: "@lab", text: "Hi" }] }),
-        contentType: "application/json",
       },
     }
   );
@@ -579,8 +570,121 @@ test("huddle prints attendees, duration, the AI notes and the transcript of a hu
   expect(view.attendees).toEqual(["Alex", "Lab"]);
   expect(view.durationSeconds).toBe(2520);
   expect(view.notes?.text).toBe("Summary\n\nShip the hook.");
-  expect(view.transcript?.text).toBe("0:20 @lab: Hi");
+  expect(view.transcript?.text).toBe("[00:14] Alex: Morning all.\n[02:52] Lab: Ship the hook today.");
+  expect(view.transcript?.lines).toEqual([
+    { at: "00:14", offsetSeconds: 14, speakerId: "U1", speaker: "Alex", text: "Morning all." },
+    { at: "02:52", offsetSeconds: 172, speakerId: "U2", speaker: "Lab", text: "Ship the hook today." },
+  ]);
   expect(view.missing).toEqual([]);
+  expect(api.calls.some((call) => call.includes("huddle_transcript"))).toBe(false);
+  expect(api.requests.filter((request) => request.method === "files.info")).toEqual([
+    { method: "files.info", params: { file: "F0C77BN7ZJ5", include_transcription: true } },
+    { method: "files.info", params: { file: "F0C73ERJ2LW", include_transcription: true } },
+  ]);
+});
+
+test("huddle finds the transcript through the notes canvas when the thread does not attach it", async () => {
+  const api = stubApi(
+    {
+      "conversations.replies": [{ ok: true, messages: [huddleRoot(["F0C7CHQUPKM"])] }],
+      "files.info": [
+        { ok: true, file: notesCanvas("F0C7CHQUPKM", "F0C7JKZ6F26") },
+        { ok: true, file: transcriptFile("F0C7JKZ6F26") },
+      ],
+      "users.info": [
+        { ok: true, user: { id: "U0BGXV6TLP7", name: "chris", profile: { display_name: "Chris" } } },
+        { ok: true, user: { id: "U2", real_name: "Lab" } },
+        { ok: true, user: { id: "U1", real_name: "Alex" } },
+      ],
+    },
+    {
+      "https://files.slack.com/files-pri/T1-F0C7CHQUPKM/canvas": {
+        body: '<p><control id="temp:C:x"><a>@U0BGXV6TLP7</a></control> reviews the PR.</p>',
+        contentType: "text/html",
+      },
+    }
+  );
+
+  const view = await run((slack) => slack.huddle(threadTarget("C1:1791301348.609899")), api);
+
+  expect(view.notes?.text).toBe("@Chris reviews the PR.");
+  expect(view.transcript?.file.id).toBe("F0C7JKZ6F26");
+  expect(view.transcript?.lines.map((line) => line.speaker)).toEqual(["Alex", "Lab"]);
+  expect(view.missing).toEqual([]);
+});
+
+test("file text prints a huddle transcript from files.info, not from its download URL", async () => {
+  const api = stubApi({
+    "files.info": [{ ok: true, file: transcriptFile("F0C7JKZ6F26") }],
+    "users.info": [
+      { ok: true, user: { id: "U2", real_name: "Lab" } },
+      { ok: true, user: { id: "U1", real_name: "Alex" } },
+    ],
+  });
+
+  const view = await run((slack) => slack.fileText("F0C7JKZ6F26"), api);
+
+  expect(view.file.kind).toBe("transcript");
+  expect(view.text).toBe("[00:14] Alex: Morning all.\n[02:52] Lab: Ship the hook today.");
+  expect(api.requests[0]).toEqual({
+    method: "files.info",
+    params: { file: "F0C7JKZ6F26", include_transcription: true },
+  });
+});
+
+test("saving a huddle transcript writes its text, because its download URL serves the web app", async () => {
+  const api = stubApi({
+    "files.info": [{ ok: true, file: transcriptFile("F0C7JKZ6F26") }],
+    "users.info": [
+      { ok: true, user: { id: "U2", real_name: "Lab" } },
+      { ok: true, user: { id: "U1", real_name: "Alex" } },
+    ],
+  });
+
+  const fetched = await run((slack) => slack.file("F0C7JKZ6F26"), api);
+
+  expect(new TextDecoder().decode(fetched.bytes)).toBe(
+    "[00:14] Alex: Morning all.\n[02:52] Lab: Ship the hook today.\n"
+  );
+  expect(fetched.contentType).toBe("text/plain; charset=utf-8");
+});
+
+test("an uploaded file titled transcript is still downloaded, not read as a huddle transcript", async () => {
+  const api = stubApi(
+    {
+      "files.info": [
+        {
+          ok: true,
+          file: {
+            id: "F9",
+            title: "Meeting transcript",
+            filetype: "text",
+            url_private: "https://files.slack.com/files-pri/T1-F9/meeting.txt",
+          },
+        },
+      ],
+    },
+    {
+      "https://files.slack.com/files-pri/T1-F9/meeting.txt": {
+        body: "We met.\n",
+        contentType: "text/plain",
+      },
+    }
+  );
+
+  const view = await run((slack) => slack.fileText("F9"), api);
+
+  expect(view.text).toBe("We met.");
+});
+
+test("a transcript Slack returns without its lines fails instead of saving the web app page", async () => {
+  const { huddle_transcription: _lines, ...withoutLines } = transcriptFile("F0C7JKZ6F26");
+  const api = stubApi({ "files.info": [{ ok: true, file: withoutLines }] });
+
+  const outcome = await run((slack) => Effect.result(slack.fileText("F0C7JKZ6F26")), api);
+
+  expect(outcome._tag).toBe("Failure");
+  if (outcome._tag === "Failure") expect(outcome.failure._tag).toBe("SlackResponseInvalid");
 });
 
 test("huddle says which part is missing when a huddle left no AI notes", async () => {

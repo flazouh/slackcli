@@ -32,17 +32,26 @@ export const fileKind = (file: SlackFile): FileKind => {
   return "file";
 };
 
+/**
+ * A transcript a huddle produced, as opposed to any file whose title says
+ * "transcript". Only these carry their text in `files.info`.
+ */
+export const isHuddleTranscript = (file: SlackFile): boolean =>
+  file.filetype === "huddle_transcript" || file.huddle_transcription !== undefined;
+
+export const fileRow = (file: SlackFile): FileRow => ({
+  id: file.id,
+  kind: fileKind(file),
+  name: file.name,
+  title: file.title,
+  filetype: file.filetype,
+  mimetype: file.mimetype,
+  size: file.size,
+  permalink: file.permalink,
+});
+
 export const fileRows = (files: ReadonlyArray<SlackFile> | undefined): ReadonlyArray<FileRow> =>
-  (files ?? []).map((file) => ({
-    id: file.id,
-    kind: fileKind(file),
-    name: file.name,
-    title: file.title,
-    filetype: file.filetype,
-    mimetype: file.mimetype,
-    size: file.size,
-    permalink: file.permalink,
-  }));
+  (files ?? []).map(fileRow);
 
 const UNITS = ["B", "KB", "MB", "GB"] as const;
 
