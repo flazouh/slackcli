@@ -23,7 +23,7 @@ import {
   SearchPayload,
   UsersListPayload,
 } from "../domain/slack-schema.ts";
-import type { SlackFile, SlackMessage, SlackUser } from "../domain/slack-schema.ts";
+import type { ActivityItem, SlackFile, SlackMessage, SlackUser } from "../domain/slack-schema.ts";
 import {
   activityPeopleIds,
   activityTargets,
@@ -170,6 +170,9 @@ const feedParams = (limit: number, types: ReadonlyArray<string>) => ({
   is_activity_inbox: true,
 });
 
+/** Slack refuses `activity.feed` with `invalid_arguments` above this many items. */
+const FEED_PAGE = 50;
+
 const HYDRATE_CONCURRENCY = 8;
 
 /** How many replies after a mention are read to find one of the user's own. */
@@ -195,7 +198,8 @@ const THREAD_PAGE = 200;
 const SINCE_SEARCH_PAGES = 5;
 /** Threads and DMs read for one `since` window, so a busy day stays bounded. */
 const SINCE_MAX_CONVERSATIONS = 80;
-const SINCE_FEED_ITEMS = 100;
+/** Feed items read for one `since` window: about two weeks of a busy feed. */
+const SINCE_FEED_ITEMS = 1000;
 const SINCE_ACTIVITY_TYPES = [...MENTION_TYPES, "thread_v2", "dm"];
 
 const THREAD_TS_IN_LINK = /[?&]thread_ts=(\d{10}\.\d{6})/;
@@ -452,20 +456,49 @@ export class Slack extends Context.Service<
             Effect.catch(() => Effect.succeed(false))
           );
 
+      /**
+       * Reads the feed page by page through its cursor, newest first, until
+       * `maxItems` are in hand, Slack has no more, or a page reaches items
+       * older than `oldest`.
+       */
+      const readFeed = Effect.fnUntraced(function* (
+        maxItems: number,
+        types: ReadonlyArray<string>,
+        oldest?: number
+      ) {
+        const items: Array<ActivityItem> = [];
+        let cursor: string | undefined;
+        do {
+          const page = yield* api.call(
+            slackCall(
+              "activity.feed",
+              {
+                ...feedParams(Math.min(FEED_PAGE, maxItems - items.length), types),
+                cursor,
+              },
+              ActivityFeedPayload
+            )
+          );
+          items.push(...page.items);
+          cursor = page.response_metadata?.next_cursor || undefined;
+          if (
+            oldest !== undefined &&
+            activityTargets(page.items).some((target) => Number(target.ts) < oldest)
+          ) {
+            break;
+          }
+        } while (cursor !== undefined && items.length < maxItems);
+        return items.slice(0, maxItems);
+      });
+
       const activity = Effect.fn("Slack.activity")(function* (
         limit: number,
         scope: "mentions" | "all",
         options: ActivityOptions = {}
       ) {
-        const feed = yield* api.call(
-          slackCall(
-            "activity.feed",
-            feedParams(limit, scope === "all" ? ALL_ACTIVITY_TYPES : MENTION_TYPES),
-            ActivityFeedPayload
-          )
-        );
+        const feed = yield* readFeed(limit, scope === "all" ? ALL_ACTIVITY_TYPES : MENTION_TYPES);
 
-        const hydrated = yield* Effect.forEach(activityTargets(feed.items), hydrate, {
+        const hydrated = yield* Effect.forEach(activityTargets(feed), hydrate, {
           concurrency: HYDRATE_CONCURRENCY,
         });
         const targets = options.unansweredOnly
@@ -776,15 +809,9 @@ export class Slack extends Context.Service<
           return found.filter((match) => inWindow(match.ts));
         });
 
-        const feed = api
-          .call(
-            slackCall(
-              "activity.feed",
-              feedParams(SINCE_FEED_ITEMS, SINCE_ACTIVITY_TYPES),
-              ActivityFeedPayload
-            )
-          )
-          .pipe(Effect.map((payload) => activityTargets(payload.items).filter((item) => inWindow(item.ts))));
+        const feed = readFeed(SINCE_FEED_ITEMS, SINCE_ACTIVITY_TYPES, sinceSeconds).pipe(
+          Effect.map((items) => activityTargets(items).filter((item) => inWindow(item.ts)))
+        );
 
         const [posts, activity] = yield* Effect.all([ownPosts, feed], { concurrency: 2 });
 

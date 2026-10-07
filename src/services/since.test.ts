@@ -182,3 +182,50 @@ test("since searches only Alex's own recent posts", async () => {
   const search = api.requests.find((request) => request.method === "search.messages");
   expect(search?.params["query"]).toBe("from:me after:2026-10-04");
 });
+
+const mentionIn = (thread: string, ts: string) => ({
+  item: {
+    type: "at_user",
+    message: { channel: "C1", ts, thread_ts: thread, author_user_id: "U4", text: "<@UME> look" },
+  },
+});
+
+/**
+ * Slack refuses `activity.feed` with `invalid_arguments` above 50 items, so a
+ * long window is read page by page through `cursor` until it reaches items
+ * older than the window.
+ */
+const pagedFeed = (method: string, params: Params): unknown => {
+  if (method !== "activity.feed") {
+    if (method === "conversations.replies" && params["ts"] === "1791293000.000100") {
+      return { ok: true, messages: [{ ts: "1791293500.000100", user: "U4", thread_ts: "1791293000.000100", text: "page two mention" }] };
+    }
+    return workspace(method, params);
+  }
+  if (Number(params["limit"]) > 50) return { ok: false, error: "invalid_arguments" };
+  switch (params["cursor"]) {
+    case undefined:
+      return { ok: true, items: [mentionIn("1791100000.000100", "1791296000.000300")], response_metadata: { next_cursor: "page2" } };
+    case "page2":
+      return {
+        ok: true,
+        items: [mentionIn("1791293000.000100", "1791293500.000100"), mentionIn("1791000000.000100", "1791000000.000200")],
+        response_metadata: { next_cursor: "page3" },
+      };
+    default:
+      return undefined;
+  }
+};
+
+test("since reads the activity feed 50 items at a time and follows its cursor to the window start", async () => {
+  const api = routedApi(pagedFeed);
+
+  const view = await runSince(api, SINCE);
+
+  const feeds = api.requests.filter((request) => request.method === "activity.feed");
+  expect(feeds.map((request) => [request.params["limit"], request.params["cursor"]])).toEqual([
+    [50, undefined],
+    [50, "page2"],
+  ]);
+  expect(view.rows.map((row) => row.message)).toContain("page two mention");
+});
