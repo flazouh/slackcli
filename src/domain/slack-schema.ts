@@ -158,6 +158,9 @@ export const SearchPayload = Schema.Struct({
     Schema.Struct({
       total: Schema.optionalKey(Schema.Number),
       matches: Schema.optionalKey(Schema.Array(SearchMatch)),
+      paging: Schema.optionalKey(
+        Schema.Struct({ pages: Schema.optionalKey(Schema.Number) })
+      ),
     })
   ),
   users: Schema.optionalKey(Schema.Record(Schema.String, SlackUser)),

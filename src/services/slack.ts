@@ -128,6 +128,8 @@ const USERS_PAGE = 1000;
 const USERS_MAX_PAGES = 5;
 
 /** One page that covers a typical thread, so the cut happens locally. */
+const SEARCH_PAGE = 100;
+const SEARCH_MAX_PAGES = 50;
 const THREAD_PAGE = 200;
 
 export class Slack extends Context.Service<
@@ -224,14 +226,34 @@ export class Slack extends Context.Service<
         } satisfies ChannelView;
       });
 
-      const search = Effect.fn("Slack.search")(function* (query: string, limit: number) {
-        const found = yield* api.call(
+      const searchPage = (query: string, count: number, page: number) =>
+        api.call(
           slackCall(
             "search.messages",
-            { query, count: limit, sort: "timestamp", sort_dir: "desc" },
+            { query, count, page, sort: "timestamp", sort_dir: "desc" },
             SearchPayload
           )
         );
+
+      /**
+       * Slack answers one page per call, and a session token gets at most
+       * SEARCH_PAGE matches per page whatever `count` asks for. Pages are
+       * fetched until `limit` matches are in hand or Slack has no more.
+       */
+      const search = Effect.fn("Slack.search")(function* (query: string, limit: number) {
+        const first = yield* searchPage(query, Math.min(limit, SEARCH_PAGE), 1);
+        const pages = first.messages?.paging?.pages ?? 1;
+        const collected = [...(first.messages?.matches ?? [])];
+        let page = 2;
+        while (collected.length < limit && page <= Math.min(pages, SEARCH_MAX_PAGES)) {
+          const next = yield* searchPage(query, SEARCH_PAGE, page);
+          const more = next.messages?.matches ?? [];
+          if (more.length === 0) break;
+          collected.push(...more);
+          yield* users.seed([...Object.values(next.users ?? {}), ...Object.values(next.bots ?? {})]);
+          page += 1;
+        }
+        const found = first;
 
         const payloadUsers = [
           ...Object.values(found.users ?? {}),
@@ -239,7 +261,7 @@ export class Slack extends Context.Service<
         ];
         yield* users.seed(payloadUsers);
 
-        const matches = found.messages?.matches ?? [];
+        const matches = collected.slice(0, limit);
         const people = yield* users.names(
           matches.flatMap((match) => [
             ...(match.user === undefined ? [] : [match.user]),
