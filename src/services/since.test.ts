@@ -182,3 +182,37 @@ test("since searches only Alex's own recent posts", async () => {
   const search = api.requests.find((request) => request.method === "search.messages");
   expect(search?.params["query"]).toBe("from:me after:2026-10-04");
 });
+
+test("since reads every search page of Alex's posts in the window, past the first five", async () => {
+  const PAGES = 8;
+  const PER_PAGE = 20;
+  const api = routedApi((method, params) => {
+    if (method === "search.messages") {
+      const page = Number(params["page"]);
+      return {
+        ok: true,
+        messages: {
+          total: PAGES * PER_PAGE,
+          paging: { pages: PAGES },
+          matches: Array.from({ length: PER_PAGE }, (_, index) => {
+            const ts = `${SINCE + 100_000 - page * 1000 - index}.000100`;
+            return {
+              ts,
+              user: "UME",
+              channel: { id: "C1", name: "proj-ori" },
+              text: `post ${page}.${index}`,
+              permalink: `https://x.slack.com/archives/C1/p${ts.replace(".", "")}`,
+            };
+          }),
+        },
+      };
+    }
+    if (method === "activity.feed") return { ok: true, items: [] };
+    if (method === "conversations.replies") return { ok: true, messages: [] };
+    return workspace(method, params);
+  });
+
+  const view = await runSince(api, SINCE, 3000);
+
+  expect(view.rows.filter((row) => row.mine)).toHaveLength(PAGES * PER_PAGE);
+});

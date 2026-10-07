@@ -610,3 +610,44 @@ test("huddle on an ordinary thread says it is not a huddle", async () => {
 
   expect(view.isHuddle).toBe(false);
 });
+
+const searchPageOf = (page: number, pages: number, perPage: number) => ({
+  ok: true,
+  messages: {
+    total: pages * perPage,
+    paging: { pages },
+    matches: Array.from({ length: perPage }, (_, index) => ({
+      ts: `${1790000000 - page * 1000 - index}.000000`,
+      username: "alex",
+      channel: { id: "C1", name: "team" },
+      text: `match ${page}.${index}`,
+    })),
+  },
+});
+
+test("search reads Slack's pages until the limit, 20 matches a page as a session token gets them", async () => {
+  const api = stubApi({
+    "search.messages": [searchPageOf(1, 3, 20), searchPageOf(2, 3, 20), searchPageOf(3, 3, 20)],
+  });
+
+  const view = await run((slack) => slack.search("from:me", 50), api);
+
+  expect(view.rows).toHaveLength(50);
+  expect(view.total).toBe(60);
+  expect(api.requests.map((request) => [request.params["page"], request.params["count"]])).toEqual([
+    [1, 100],
+    [2, 100],
+    [3, 100],
+  ]);
+});
+
+test("search stops at Slack's last page when the limit is larger than the results", async () => {
+  const api = stubApi({
+    "search.messages": [searchPageOf(1, 3, 20), searchPageOf(2, 3, 20), searchPageOf(3, 3, 20)],
+  });
+
+  const view = await run((slack) => slack.search("from:me", 1000), api);
+
+  expect(view.rows).toHaveLength(60);
+  expect(api.calls).toEqual(["search.messages", "search.messages", "search.messages"]);
+});
