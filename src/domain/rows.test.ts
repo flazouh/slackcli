@@ -31,6 +31,7 @@ test("renders search matches with resolved mentions and stripped links", () => {
       message: "@Example User read the setup guide",
       at: "2023-11-14T22:13:20.123Z",
       url: "https://workspace.invalid/archives/C00000001/p1700000000123456",
+      files: [],
     },
   ]);
 });
@@ -43,6 +44,7 @@ test("keeps a search match usable when Slack returns no text or channel name", (
       message: "Open in Slack for message text.",
       at: "2023-11-14T22:13:20.123Z",
       url: undefined,
+      files: [],
     },
   ]);
 });
@@ -122,6 +124,7 @@ test("renders channel history oldest-first with resolved authors and permalinks"
       at: "2023-11-14T22:13:21.000Z",
       url: "https://app.slack.com/client/T00000001/C00000001/p1700000001000001",
       replies: undefined,
+      files: [],
     },
     {
       author: "First User",
@@ -129,6 +132,7 @@ test("renders channel history oldest-first with resolved authors and permalinks"
       at: "2023-11-14T22:13:22.000Z",
       url: "https://app.slack.com/client/T00000001/C00000001/p1700000002000002",
       replies: undefined,
+      files: [],
     },
   ]);
 });
@@ -147,6 +151,7 @@ test("labels history authored by a bot without a user id", () => {
       at: "2023-11-14T22:13:21.000Z",
       url: "https://app.slack.com/client/T00000001/C00000001/p1700000001000001",
       replies: undefined,
+      files: [],
     },
   ]);
 });
@@ -188,6 +193,7 @@ test("renders activity items with human labels, channel names and cleaned text",
       message: "@channel Welcome @Second User here",
       at: "2023-11-14T22:13:31.000Z",
       url: "https://app.slack.com/client/T00000001/C00000001/p1700000011000001",
+      files: [],
     },
     {
       notification: "Direct mention",
@@ -197,6 +203,7 @@ test("renders activity items with human labels, channel names and cleaned text",
       message: "Open in Slack for message text.",
       at: "2023-11-14T22:13:30.000Z",
       url: "https://app.slack.com/client/T00000001/C00000001/p1700000010000000",
+      files: [],
     },
   ]);
 });

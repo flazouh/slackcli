@@ -1,14 +1,23 @@
-import { Console, Effect, Option } from "effect";
+import { Console, Effect, FileSystem, Option, Path } from "effect";
 import { Argument, Command, Flag, Prompt } from "effect/unstable/cli";
 import { FetchHttpClient } from "effect/unstable/http";
 
 import { WriteNotConfirmed } from "../domain/errors.ts";
+import { parseFileTarget } from "../domain/file-text.ts";
+import { parseSince } from "../domain/since.ts";
 import { parseMessageTarget, parseThreadTarget } from "../domain/thread-target.ts";
 import { ChannelDirectory } from "../services/channel-directory.ts";
 import { writeSession } from "../services/credentials.ts";
 import { Slack } from "../services/slack.ts";
 import { collect, verify } from "./login.ts";
-import { paintFor, renderMentions, renderMessages, renderSearch } from "./render.ts";
+import {
+  paintFor,
+  renderHuddle,
+  renderMentions,
+  renderMessages,
+  renderSearch,
+  renderSince,
+} from "./render.ts";
 import type { RenderOptions } from "./render.ts";
 
 const limit = Flag.integer("limit").pipe(
@@ -143,6 +152,53 @@ const thread = Command.make(
   })
 ).pipe(Command.withDescription("Show recent replies in a thread"));
 
+const huddle = Command.make(
+  "huddle",
+  {
+    target: Argument.string("target").pipe(
+      Argument.withDescription("The huddle's thread link, or channel:timestamp")
+    ),
+    json,
+  },
+  Effect.fn("huddle")(function* (config) {
+    const slack = yield* Slack;
+    const target = yield* Effect.fromResult(parseThreadTarget(config.target));
+    const view = yield* slack.huddle(target);
+    yield* show(view, config.json, () => renderHuddle(view, layout({ full: true })));
+  })
+).pipe(
+  Command.withDescription("Show a huddle: who attended, how long, its AI notes and its transcript")
+);
+
+const since = Command.make(
+  "since",
+  {
+    when: Argument.string("when").pipe(
+      Argument.withDescription("A duration back from now (3h, 90m, 1d) or an ISO time")
+    ),
+    limit: Flag.integer("limit").pipe(
+      Flag.withAlias("n"),
+      Flag.filterMap(
+        (value) => (value > 0 ? Option.some(value) : Option.none()),
+        () => "Expected a positive item limit"
+      ),
+      Flag.withDefault(500),
+      Flag.withDescription("Maximum messages to return; the newest are kept")
+    ),
+    json,
+  },
+  Effect.fn("since")(function* (config) {
+    const start = yield* Effect.fromResult(parseSince(config.when, new Date()));
+    const slack = yield* Slack;
+    const view = yield* slack.since(start, config.limit);
+    yield* show(view, config.json, () => renderSince(view, layout({ full: true })));
+  })
+).pipe(
+  Command.withDescription(
+    "Everything around you since a time, in full: your posts, replies in your threads, mentions, DMs"
+  )
+);
+
 /** Both activity commands read the same feed; they differ only in what it filters to. */
 const activityCommand = (name: string, scope: "mentions" | "all", description: string) =>
   Command.make(
@@ -237,6 +293,62 @@ const edit = Command.make(
     yield* show(edited, config.json, () => `Edited in ${edited.channel}\n${edited.url}`);
   })
 ).pipe(Command.withDescription("Replace the text of one of your own messages"));
+
+/**
+ * A file name from Slack is user input. Only its last path segment is used, and
+ * anything a shell or a file system would trip over is replaced.
+ */
+const safeFileName = (name: string): string =>
+  name.split(/[\\/]/).pop()?.replace(/[^\w.\- ]+/g, "_").replace(/^\.+/, "") || "slack-file";
+
+const file = Command.make(
+  "file",
+  {
+    target: Argument.string("target").pipe(
+      Argument.withDescription("A file id (F0123ABCD) or any Slack link to the file")
+    ),
+    output: Flag.string("output").pipe(
+      Flag.withAlias("o"),
+      Flag.optional,
+      Flag.withDescription("Where to save the file; defaults to its name in the current folder")
+    ),
+    text: Flag.boolean("text").pipe(
+      Flag.withDefault(false),
+      Flag.withDescription("Print a canvas, transcript or text file as plain text instead of saving it")
+    ),
+    json,
+  },
+  Effect.fn("file")(function* (config) {
+    const id = yield* Effect.fromResult(parseFileTarget(config.target));
+    const slack = yield* Slack;
+    const fs = yield* FileSystem.FileSystem;
+    const path = yield* Path.Path;
+    const output = Option.getOrUndefined(config.output);
+
+    if (config.text) {
+      const view = yield* slack.fileText(id);
+      if (output === undefined) {
+        yield* show(view, config.json, () => view.text);
+        return;
+      }
+      const target = path.resolve(output);
+      yield* fs.writeFileString(target, `${view.text}\n`);
+      yield* show({ file: view.file, path: target }, config.json, () => target);
+      return;
+    }
+
+    const fetched = yield* slack.file(id);
+    const target = path.resolve(
+      output ?? safeFileName(fetched.file.name ?? fetched.file.title ?? fetched.file.id)
+    );
+    yield* fs.writeFile(target, fetched.bytes);
+    yield* show(
+      { file: fetched.file, path: target, bytes: fetched.bytes.length },
+      config.json,
+      () => target
+    );
+  })
+).pipe(Command.withDescription("Download one Slack file, or print a canvas or transcript as text"));
 
 const refresh = Command.make(
   "refresh",
@@ -347,12 +459,15 @@ export const slackcli = Command.make("slackcli", {}).pipe(
     read,
     search,
     thread,
+    huddle,
+    since,
     mentions,
     inbox,
     send,
     reply,
     edit,
     users,
+    file,
     login,
     whoami,
     refresh,

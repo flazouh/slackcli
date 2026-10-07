@@ -1,8 +1,10 @@
+import { fileLine } from "./files.ts";
 import type {
   Attachment,
   RichTextNode,
   RichTextObject,
   RichTextStyle,
+  SlackFile,
 } from "./slack-schema.ts";
 
 export type PeopleIndex = ReadonlyMap<string, string>;
@@ -16,6 +18,7 @@ export interface TextBearing {
   readonly text?: string | undefined;
   readonly blocks?: ReadonlyArray<RichTextNode> | undefined;
   readonly attachments?: ReadonlyArray<typeof Attachment.Type> | undefined;
+  readonly files?: ReadonlyArray<SlackFile> | undefined;
 }
 
 export const NO_TEXT = "Open in Slack for message text.";
@@ -150,9 +153,18 @@ export const messageText = (message: TextBearing): string =>
     message.text ||
     attachmentText(message.attachments ?? [])).trim();
 
+/**
+ * The text, then one line per file. `NO_TEXT` is left only for a message that
+ * has neither, because a file-only message (a screenshot, a huddle's notes) is
+ * readable once its files are named.
+ */
 export const readableMessage = (message: TextBearing, people: PeopleIndex): string => {
   const text = messageText(message);
-  return text ? readableSlackText(text, people) : NO_TEXT;
+  const lines = [
+    ...(text ? [readableSlackText(text, people)] : []),
+    ...(message.files ?? []).map(fileLine),
+  ];
+  return lines.length === 0 ? NO_TEXT : lines.join("\n");
 };
 
 export const slackTsToIso = (ts: string): string => new Date(Number(ts) * 1000).toISOString();

@@ -25,6 +25,7 @@ const stubApi = (options: { readonly fails?: ReadonlySet<string> } = {}) => {
     },
     workspaceRef: Effect.succeed("T1"),
     session: Effect.die("the directory must not read credentials"),
+    download: () => Effect.die("the directory must not download files"),
   });
 
   return { asked, layer };

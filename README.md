@@ -74,6 +74,10 @@ slackcli search deploy failed -n 20   # search the workspace
 slackcli mentions                     # messages that mention you
 slackcli mentions --unanswered        # only those you have not replied to in their thread
 slackcli inbox                        # the whole activity feed: mentions, replies, DMs, reactions
+slackcli since 3h                     # everything around you in full: your posts, replies, mentions, DMs
+slackcli file F0123ABCD -o shot.png   # download a file shared on a message
+slackcli file <canvas link> --text    # print a canvas or huddle transcript as plain text
+slackcli huddle <thread link>         # a huddle: attendees, duration, AI notes, transcript
 slackcli send project-alpha ship it   # post, after a confirmation
 slackcli reply <link> on it           # reply in a thread
 slackcli users perry                  # find a user and the <@id> syntax that pings them
@@ -83,6 +87,15 @@ slackcli refresh                      # rebuild the cached channel list
 
 Every command takes `--json` for its normalized result. Every read takes
 `--full` to print long messages instead of clamping them to four lines.
+
+Message rows carry a `files` array (id, kind, name, title, filetype, mimetype,
+size, permalink). A file-only message reads `[file] shot.png (image/png, 412 KB)`;
+canvases and huddle transcripts show as `[canvas]` and `[transcript]`.
+
+`since` takes a duration (`3h`, `90m`, `1d`) or an ISO time. It finds your own
+posts through search, so a post made in the last few seconds can be missing
+until Slack indexes it. It keeps the newest `--limit` messages (default 500)
+and says how many older ones it cut.
 
 A channel accepts a name such as `project-alpha`, `#project-alpha`, or its id.
 A thread is addressed by any Slack link, including the one this tool prints, or

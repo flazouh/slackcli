@@ -1,5 +1,5 @@
 import { Context, Duration, Effect, Layer, Redacted, Schedule, Schema } from "effect";
-import { HttpClient, HttpClientError, HttpClientRequest } from "effect/unstable/http";
+import { FetchHttpClient, HttpClient, HttpClientError, HttpClientRequest } from "effect/unstable/http";
 import { RateLimiter } from "effect/unstable/persistence";
 
 import {
@@ -203,6 +203,88 @@ export const runCall = <A, E extends SlackTransportError>(
   return attempt(0);
 };
 
+export interface Downloaded {
+  readonly bytes: Uint8Array;
+  readonly contentType: string | undefined;
+}
+
+const DOWNLOAD = "file download";
+const MAX_REDIRECTS = 3;
+
+/**
+ * Only an https URL on a Slack host may carry the session. A file's own URL
+ * comes from Slack, but a redirect could point anywhere, so every hop is checked.
+ */
+const slackFileUrl = (value: string): URL | undefined => {
+  try {
+    const url = new URL(value);
+    return url.protocol === "https:" && SLACK_HOST.test(url.hostname) ? url : undefined;
+  } catch {
+    return undefined;
+  }
+};
+
+/**
+ * Fetches a private file (`url_private`) the way the web client does: the
+ * session cookie plus the token as a bearer header. Redirects are followed by
+ * hand, because fetch would otherwise forward the cookie to whatever host a
+ * redirect names.
+ */
+export const runDownload = <E extends SlackTransportError>(
+  client: HttpClient.HttpClient.With<E, never>,
+  session: SlackSession,
+  url: string
+): Effect.Effect<Downloaded, SlackCallError> => {
+  const [token] = tokenCandidates(session.auth, "workspace");
+  const cookie = cookieHeader(session.auth);
+
+  const hop = (value: string, left: number): Effect.Effect<Downloaded, SlackCallError> =>
+    Effect.gen(function* () {
+      const target = slackFileUrl(value);
+      if (target === undefined) {
+        return yield* new SlackTransportFailure({
+          method: DOWNLOAD,
+          detail: `refused to send the Slack session to ${value}: not an https Slack URL`,
+        });
+      }
+
+      const request = HttpClientRequest.get(target.toString()).pipe(
+        HttpClientRequest.setHeaders({
+          "user-agent": "slackcli/0.1.0",
+          ...(cookie ? { cookie } : {}),
+        }),
+        token === undefined ? (self) => self : HttpClientRequest.bearerToken(Redacted.value(token))
+      );
+
+      const response = yield* client.execute(request).pipe(
+        Effect.provideService(FetchHttpClient.RequestInit, { redirect: "manual" }),
+        Effect.mapError((cause) => sendFailure(DOWNLOAD, cause))
+      );
+
+      if (response.status >= 300 && response.status < 400) {
+        const location = response.headers["location"];
+        if (location === undefined || left === 0) {
+          return yield* new SlackTransportFailure({
+            method: DOWNLOAD,
+            detail: `HTTP ${response.status} without a usable redirect`,
+          });
+        }
+        return yield* hop(new URL(location, target).toString(), left - 1);
+      }
+
+      if (response.status >= 400) {
+        return yield* new SlackApiFailure({ method: DOWNLOAD, slackError: `http_${response.status}` });
+      }
+
+      const body = yield* response.arrayBuffer.pipe(
+        Effect.mapError((cause) => sendFailure(DOWNLOAD, cause))
+      );
+      return { bytes: new Uint8Array(body), contentType: response.headers["content-type"] };
+    });
+
+  return hop(url, MAX_REDIRECTS);
+};
+
 export class SlackApi extends Context.Service<
   SlackApi,
   {
@@ -211,6 +293,8 @@ export class SlackApi extends Context.Service<
     /** The id Slack uses in `/client/<id>/…` links, resolved once per process. */
     readonly workspaceRef: Effect.Effect<string, SlackCallError>;
     readonly session: Effect.Effect<SlackSession, SlackCallError>;
+    /** Downloads one private Slack file with the session's credentials. */
+    readonly download: (url: string) => Effect.Effect<Downloaded, SlackCallError>;
   }
 >()("slackcli/SlackApi") {
   static readonly layer: Layer.Layer<
@@ -248,8 +332,13 @@ export class SlackApi extends Context.Service<
         return auth.enterprise_id ?? auth.team_id;
       });
 
+      const download = Effect.fn("SlackApi.download")(function* (url: string) {
+        return yield* runDownload(client, yield* readSession, url);
+      });
+
       return {
         call,
+        download,
         session: readSession,
         workspaceRef: yield* Effect.cached(resolveWorkspaceRef),
       };
