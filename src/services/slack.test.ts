@@ -610,3 +610,26 @@ test("huddle on an ordinary thread says it is not a huddle", async () => {
 
   expect(view.isHuddle).toBe(false);
 });
+
+test("activity asks the feed for at most 50 items a page and only for what the limit still needs", async () => {
+  const mention = (ts: string) => ({
+    item: { type: "at_user", message: { channel: "C1", ts, author_user_id: "U2", text: `ping at ${ts}` } },
+  });
+  const page = (from: number, count: number, cursor?: string) => ({
+    ok: true,
+    items: Array.from({ length: count }, (_, index) => mention(`${1790000000 - from - index}.000000`)),
+    ...(cursor === undefined ? {} : { response_metadata: { next_cursor: cursor } }),
+  });
+  const api = stubApi({
+    "activity.feed": [page(0, 50, "c2"), page(50, 50, "c3")],
+    "users.info": [{ ok: true, user: { id: "U2", real_name: "Pinger" } }],
+  });
+
+  const view = await run((slack) => slack.activity(70, "mentions"), api);
+
+  expect(view.rows).toHaveLength(70);
+  expect(api.requests.filter((request) => request.method === "activity.feed").map((request) => [request.params["limit"], request.params["cursor"]])).toEqual([
+    [50, undefined],
+    [20, "c2"],
+  ]);
+});
