@@ -437,6 +437,24 @@ const users = Command.make(
   })
 ).pipe(Command.withDescription("Find workspace users and the <@id> syntax that mentions them"));
 
+/**
+ * The conversation ids that `read` takes for DMs. Search shows a DM as the
+ * other person's user id, which `read` cannot open.
+ */
+const dms = Command.make(
+  "dms",
+  { json },
+  Effect.fn("dms")(function* (config) {
+    const slack = yield* Slack;
+    const view = yield* slack.dms;
+    yield* show(view, config.json, () =>
+      view.rows.length === 0
+        ? "No direct messages"
+        : view.rows.map((row) => [row.channel, row.kind, row.with].join("  ")).join("\n")
+    );
+  })
+).pipe(Command.withDescription("List your direct and group DMs with the id that read takes"));
+
 const whoami = Command.make(
   "whoami",
   { json },
@@ -467,6 +485,7 @@ export const slackcli = Command.make("slackcli", {}).pipe(
     reply,
     edit,
     users,
+    dms,
     file,
     login,
     whoami,

@@ -166,6 +166,10 @@ export type SlackUser = typeof SlackUser.Type;
 export const SlackChannel = Schema.Struct({
   id: Schema.String,
   name: Schema.optionalKey(Schema.String),
+  is_im: Schema.optionalKey(Schema.Boolean),
+  is_mpim: Schema.optionalKey(Schema.Boolean),
+  /** The other person in a direct message. */
+  user: Schema.optionalKey(Schema.String),
 }).annotate({ identifier: "SlackChannel" });
 export type SlackChannel = typeof SlackChannel.Type;
 

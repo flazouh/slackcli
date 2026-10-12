@@ -15,6 +15,7 @@ import {
 import {
   ActivityFeedPayload,
   AuthTestPayload,
+  ConversationListPayload,
   ConversationViewPayload,
   HistoryPayload,
   PostMessagePayload,
@@ -24,6 +25,7 @@ import {
 import type {
   ActivityItem,
   SearchMatch,
+  SlackChannel,
   SlackFile,
   SlackMessage,
   SlackUser,
@@ -86,6 +88,18 @@ export interface UserRow {
 
 export interface UsersView {
   readonly rows: ReadonlyArray<UserRow>;
+}
+
+export interface DmRow {
+  /** The conversation id that `read` takes. */
+  readonly channel: string;
+  readonly kind: "dm" | "group";
+  /** The other person, or every member of a group DM. */
+  readonly with: string;
+}
+
+export interface DmsView {
+  readonly rows: ReadonlyArray<DmRow>;
 }
 
 export interface IdentityView {
@@ -195,6 +209,15 @@ const SEARCH_MAX_PAGES = 50;
 /** One page that covers a typical thread, so the cut happens locally. */
 const THREAD_PAGE = 200;
 
+/** Slack's largest `conversations.history` page. */
+const HISTORY_PAGE = 200;
+
+/** Direct and group conversations per `users.conversations` page. */
+const DM_PAGE = 200;
+
+/** A group DM's name is `mpdm-first--second--third-1`. */
+const GROUP_DM_NAME = /^mpdm-(.*)-\d+$/;
+
 /** Threads and DMs read for one `since` window, so a busy day stays bounded. */
 const SINCE_MAX_CONVERSATIONS = 80;
 /** Feed items read for one `since` window: about two weeks of a busy feed. */
@@ -240,6 +263,8 @@ export class Slack extends Context.Service<
       limit: number
     ) => Effect.Effect<UsersView, SlackCallError>;
     readonly whoami: Effect.Effect<IdentityView, SlackCallError>;
+    /** Every direct and group conversation the signed-in user is in. */
+    readonly dms: Effect.Effect<DmsView, SlackCallError>;
     /** One file's metadata and bytes, fetched with the session's credentials. */
     readonly file: (id: string) => Effect.Effect<FetchedFile, SlackCallError>;
     /** A canvas, transcript or text file as plain text. */
@@ -269,6 +294,49 @@ export class Slack extends Context.Service<
           ...mentionedIds(message),
         ]);
 
+      const oldestTs = (messages: ReadonlyArray<SlackMessage>): string | undefined =>
+        messages.reduce<string | undefined>(
+          (oldest, message) =>
+            oldest === undefined || Number(message.ts) < Number(oldest) ? message.ts : oldest,
+          undefined
+        );
+
+      /**
+       * The history older than `seen`, one page at a time, until the channel
+       * messages in hand reach `limit` or Slack says there are no more.
+       */
+      const olderHistory = Effect.fnUntraced(function* (
+        channel: string,
+        seen: ReadonlyArray<SlackMessage>,
+        hasMore: boolean,
+        limit: number
+      ) {
+        const collected: Array<SlackMessage> = [];
+        let more = hasMore;
+        let before = oldestTs(seen);
+        let held = seen.filter(isChannelLevel).length;
+        while (more && before !== undefined && held < limit) {
+          const page = yield* api.call(
+            slackCall(
+              "conversations.history",
+              {
+                channel,
+                latest: before,
+                inclusive: false,
+                limit: Math.min(HISTORY_PAGE, limit - held),
+              },
+              HistoryPayload
+            )
+          );
+          if (page.messages.length === 0) break;
+          collected.push(...page.messages);
+          held += page.messages.filter(isChannelLevel).length;
+          before = oldestTs(page.messages);
+          more = page.has_more === true;
+        }
+        return collected;
+      });
+
       const read = Effect.fn("Slack.read")(function* (reference: string, limit: number) {
         const channelId = yield* channels.resolve(reference);
 
@@ -284,10 +352,19 @@ export class Slack extends Context.Service<
         );
 
         // `conversations.view` returns a full screen of channel messages and
-        // thread replies whatever `limit` says, so both the filter and the
-        // requested count are applied here, newest kept.
+        // thread replies whatever `limit` says. When that screen holds fewer
+        // channel messages than asked and Slack has more, older pages follow
+        // from `conversations.history`, each starting below the oldest message
+        // seen so far. The filter and the count are applied at the end, newest
+        // kept.
         const returned = view.history?.messages ?? view.messages ?? [];
-        const messages = returned
+        const older = yield* olderHistory(
+          channelId,
+          returned,
+          view.history?.has_more === true,
+          limit
+        );
+        const messages = [...returned, ...older]
           .filter(isChannelLevel)
           .sort((left, right) => Number(right.ts) - Number(left.ts))
           .slice(0, limit);
@@ -638,6 +715,47 @@ export class Slack extends Context.Service<
         } satisfies UsersView;
       });
 
+      const groupMembers = (channel: SlackChannel): string => {
+        const members = GROUP_DM_NAME.exec(channel.name ?? "")?.[1];
+        return members === undefined ? channel.name ?? channel.id : members.split("--").join(", ");
+      };
+
+      /**
+       * Lists direct and group conversations from `users.conversations`, page by
+       * page. The other person in a DM is named from the user directory, one
+       * page at a time; a group DM is named from its own `mpdm-` name.
+       */
+      const dms = Effect.fn("Slack.dms")(function* () {
+        const rows: Array<DmRow> = [];
+        let cursor: string | undefined;
+        do {
+          const page = yield* api.call(
+            slackCall(
+              "users.conversations",
+              { types: "im,mpim", exclude_archived: true, limit: DM_PAGE, cursor },
+              ConversationListPayload
+            )
+          );
+          const people = yield* users.names(
+            page.channels.flatMap((channel) => (channel.is_im && channel.user ? [channel.user] : []))
+          );
+          rows.push(
+            ...page.channels.map((channel): DmRow =>
+              channel.is_im
+                ? {
+                    channel: channel.id,
+                    kind: "dm",
+                    with: people.get(channel.user ?? "") ?? channel.user ?? channel.id,
+                  }
+                : { channel: channel.id, kind: "group", with: groupMembers(channel) }
+            )
+          );
+          const next = page.response_metadata?.next_cursor;
+          cursor = next !== undefined && next.length > 0 ? next : undefined;
+        } while (cursor !== undefined);
+        return { rows } satisfies DmsView;
+      })();
+
       const whoami = Effect.fn("Slack.whoami")(function* () {
         const session = yield* api.session;
         const identity = yield* api.call(slackCall("auth.test", {}, AuthTestPayload));
@@ -901,6 +1019,7 @@ export class Slack extends Context.Service<
         activity,
         users: listUsers,
         whoami,
+        dms,
         send: (reference: string, text: string) =>
           channels.resolve(reference).pipe(Effect.flatMap((channel) => post(channel, text))),
         reply: (target: ThreadTarget, text: string) =>
