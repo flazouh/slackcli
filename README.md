@@ -69,6 +69,9 @@ reach for on a laptop and the variables are what you set on a server.
 
 ```bash
 slackcli read project-alpha -n 20     # latest messages in a channel
+slackcli read D0123ABCD -n 5000       # a DM's full history: read pages back until -n
+slackcli dms                          # your direct and group DMs, with the id read takes
+slackcli search 'from:me' -n 5000     # every message you wrote, DMs included
 slackcli thread <link> -n 10          # the newest replies in a thread
 slackcli search deploy failed -n 20   # search the workspace
 slackcli mentions                     # messages that mention you

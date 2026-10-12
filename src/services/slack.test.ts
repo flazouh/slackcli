@@ -101,6 +101,101 @@ test("read filters thread replies, applies the limit, and uses payload authors",
   expect(api.calls).toEqual(["conversations.view"]);
 });
 
+test("read pages older history until the limit is met or Slack has no more", async () => {
+  const api = stubApi({
+    "conversations.view": [
+      {
+        ok: true,
+        history: {
+          messages: [
+            { ts: "5.000000", user: "U1", text: "five" },
+            { ts: "4.000000", user: "U1", text: "four" },
+          ],
+          has_more: true,
+        },
+        users: [{ id: "U1", real_name: "First User" }],
+      },
+    ],
+    "conversations.history": [
+      {
+        ok: true,
+        messages: [
+          { ts: "3.000000", user: "U1", text: "three" },
+          { ts: "2.500000", thread_ts: "1.000000", user: "U1", text: "reply" },
+          { ts: "2.000000", user: "U1", text: "two" },
+        ],
+        has_more: true,
+      },
+      {
+        ok: true,
+        messages: [{ ts: "1.000000", user: "U1", text: "one" }],
+        has_more: false,
+      },
+    ],
+  });
+
+  const view = await run((slack) => slack.read("team", 10), api);
+
+  expect(view.rows.map((row) => row.message)).toEqual(["one", "two", "three", "four", "five"]);
+  expect(api.requests.filter((request) => request.method === "conversations.history").map((request) => request.params["latest"])).toEqual(["4.000000", "2.000000"]);
+});
+
+test("read asks for no older page when the first page already holds the limit", async () => {
+  const api = stubApi({
+    "conversations.view": [
+      {
+        ok: true,
+        history: {
+          messages: [
+            { ts: "2.000000", user: "U1", text: "two" },
+            { ts: "1.000000", user: "U1", text: "one" },
+          ],
+          has_more: true,
+        },
+        users: [{ id: "U1", real_name: "First User" }],
+      },
+    ],
+  });
+
+  const view = await run((slack) => slack.read("team", 2), api);
+
+  expect(view.rows.map((row) => row.message)).toEqual(["one", "two"]);
+  expect(api.calls).toEqual(["conversations.view"]);
+});
+
+test("dms lists direct and group conversations with who is in them", async () => {
+  const api = stubApi({
+    "users.conversations": [
+      {
+        ok: true,
+        channels: [
+          { id: "D1", is_im: true, user: "U2" },
+          { id: "G1", is_mpim: true, name: "mpdm-first--second--third-1" },
+        ],
+        response_metadata: { next_cursor: "page2" },
+      },
+      {
+        ok: true,
+        channels: [{ id: "D2", is_im: true, user: "U3" }],
+        response_metadata: { next_cursor: "" },
+      },
+    ],
+    "users.info": [
+      { ok: true, user: { id: "U2", real_name: "Second User" } },
+      { ok: true, user: { id: "U3", real_name: "Third User" } },
+    ],
+  });
+
+  const view = await run((slack) => slack.dms, api);
+
+  expect(view.rows).toEqual([
+    { channel: "D1", kind: "dm", with: "Second User" },
+    { channel: "G1", kind: "group", with: "first, second, third" },
+    { channel: "D2", kind: "dm", with: "Third User" },
+  ]);
+  expect(api.requests[0]?.params["types"]).toBe("im,mpim");
+});
+
 test("activity hydrates a thread reply and resolves its author", async () => {
   const api = stubApi({
     "activity.feed": [

@@ -4,6 +4,8 @@ This file records user-visible package changes.
 
 ## Unreleased
 
+- `read` pages back through `conversations.history` until it has `-n` messages or the conversation has no more. It used to stop at the first screen, about 100 messages.
+- Add `dms` to list your direct and group DMs with the conversation id that `read` takes.
 - Add `edit` to update one of your own messages.
 - Add a `files` array to every message row. A file-only message names its files instead of "Open in Slack for message text."
 - Add `file` to download a file, with `--text` for a canvas or huddle transcript.
