@@ -30,7 +30,6 @@ export interface SearchRow {
   readonly at: string;
   readonly url: string | undefined;
   readonly files: ReadonlyArray<FileRow>;
-  readonly editedAt?: string | undefined;
 }
 
 export interface MentionRow {
@@ -90,7 +89,6 @@ export const searchRows = (
     at: slackTsToIso(match.ts),
     url: match.permalink,
     files: fileRows(match.files),
-    editedAt: editedAt(match),
   }));
 
 /**

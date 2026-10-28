@@ -44,10 +44,12 @@ const clock = (iso: string, now: Date): string => {
 const stamp = (
   row: { readonly at: string; readonly editedAt?: string | undefined },
   now: Date
-): string =>
-  row.editedAt === undefined
-    ? clock(row.at, now)
-    : `${clock(row.at, now)} (edited ${clock(row.editedAt, now)})`;
+): string => {
+  if (row.editedAt === undefined) return clock(row.at, now);
+  // Measured against the post rather than today, so a same-day edit of an
+  // older post prints its time once, not its date twice.
+  return `${clock(row.at, now)} (edited ${clock(row.editedAt, new Date(row.at))})`;
+};
 
 const pad = (value: string, width: number): string =>
   value.length >= width ? value.slice(0, width) : value + " ".repeat(width - value.length);

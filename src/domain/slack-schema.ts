@@ -196,6 +196,9 @@ export const ResponseEnvelope = Schema.Struct({
 export const HistoryPayload = Schema.Struct({
   messages: Schema.Array(SlackMessage),
   has_more: Schema.optionalKey(Schema.Boolean),
+  response_metadata: Schema.optionalKey(
+    Schema.Struct({ next_cursor: Schema.optionalKey(Schema.String) })
+  ),
 });
 
 /**
@@ -225,7 +228,6 @@ export const SearchMatch = Schema.Struct({
   blocks: Schema.optionalKey(Schema.Array(RichTextNodeSchema)),
   attachments: Schema.optionalKey(Schema.Array(Attachment)),
   files: Schema.optionalKey(Schema.Array(SlackFile)),
-  edited: Schema.optionalKey(MessageEdit),
 }).annotate({ identifier: "SearchMatch" });
 export type SearchMatch = typeof SearchMatch.Type;
 

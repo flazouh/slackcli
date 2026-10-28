@@ -186,16 +186,18 @@ const since = Command.make(
       Flag.withDescription("Maximum messages to return; the newest are kept")
     ),
     lookback: Flag.string("lookback").pipe(
-      Flag.withDefault("6h"),
+      Flag.optional,
       Flag.withDescription(
-        "How far before the window to look for posts edited inside it (6h, 90m, 0m)"
+        "How far before the window to look for posts edited inside it (default 6h; 90m, 0m)"
       )
     ),
     json,
   },
   Effect.fn("since")(function* (config) {
     const start = yield* Effect.fromResult(parseSince(config.when, new Date()));
-    const lookback = yield* Effect.fromResult(parseDuration(config.lookback));
+    const lookback = Option.isSome(config.lookback)
+      ? yield* Effect.fromResult(parseDuration(config.lookback.value))
+      : undefined;
     const slack = yield* Slack;
     const view = yield* slack.since(start, config.limit, lookback);
     yield* show(view, config.json, () => renderSince(view, layout({ full: true })));

@@ -143,7 +143,7 @@ export interface SinceRow {
    * Set when a person edited the message. A row posted before the window is
    * listed only because this falls inside it.
    */
-  readonly editedAt: string | undefined;
+  readonly editedAt?: string | undefined;
   readonly message: string;
   readonly files: ReadonlyArray<FileRow>;
 }
@@ -230,6 +230,9 @@ const GROUP_DM_NAME = /^mpdm-(.*)-\d+$/;
  * "Working…" and edits that same message into its answer minutes later.
  */
 export const SINCE_LOOKBACK_SECONDS = 6 * 3600;
+
+/** Pages of one thread read for one `since` window. */
+const SINCE_THREAD_PAGES = 5;
 
 /** Threads and DMs read for one `since` window, so a busy day stays bounded. */
 const SINCE_MAX_CONVERSATIONS = 80;
@@ -928,43 +931,27 @@ export class Slack extends Context.Service<
 
         const [posts, activity] = yield* Effect.all([ownPosts, feed], { concurrency: 2 });
 
-        // A conversation is a thread (channel + root) or a whole DM (channel only).
-        // The ones with a post inside the window go first, so the conversation
-        // cap drops look-back reads before anything posted in the window.
-        const threads = new Map<string, { readonly channel: string; readonly root: string }>();
-        const dms = new Set<string>();
-        const addThread = (channel: string | undefined, root: string) => {
-          if (channel !== undefined) threads.set(`${channel}:${root}`, { channel, root });
-        };
-        for (const recent of [true, false]) {
-          for (const post of posts) {
-            if (inWindow(post.ts) !== recent) continue;
-            const root = THREAD_TS_IN_LINK.exec(post.permalink ?? "")?.[1] ?? post.ts;
-            addThread(post.channel?.id, root);
-          }
-          for (const item of activity) {
-            if (inWindow(item.ts) !== recent) continue;
-            if (item.kind === "dm" || item.kind === "bot_dm_bundle") dms.add(item.channel);
-            else addThread(item.channel, item.threadTs ?? item.ts);
-          }
-        }
+        type Found = { readonly channel: string; readonly root: string; readonly message: SlackMessage };
 
-        const readThread = (thread: { readonly channel: string; readonly root: string }) =>
-          api
-            .call(
+        // `conversations.replies` pages oldest first, and the look-back puts
+        // older replies ahead of the window, so a busy thread is read to its end.
+        const readThread = Effect.fnUntraced(function* (channel: string, root: string) {
+          const found: Array<Found> = [];
+          let cursor: string | undefined;
+          for (let page = 0; page < SINCE_THREAD_PAGES; page += 1) {
+            const payload = yield* api.call(
               slackCall(
                 "conversations.replies",
-                { channel: thread.channel, ts: thread.root, oldest: readFrom, limit: THREAD_PAGE },
+                { channel, ts: root, oldest: readFrom, limit: THREAD_PAGE, cursor },
                 HistoryPayload
               )
-            )
-            .pipe(
-              Effect.map((payload) =>
-                payload.messages.map((message) => ({ channel: thread.channel, root: thread.root, message }))
-              ),
-              // One thread the token cannot read must not lose the rest.
-              Effect.catch(() => Effect.succeed([]))
             );
+            found.push(...payload.messages.map((message) => ({ channel, root, message })));
+            cursor = payload.response_metadata?.next_cursor || undefined;
+            if (!payload.has_more || cursor === undefined) break;
+          }
+          return found;
+        });
 
         const readDm = (channel: string) =>
           api
@@ -977,19 +964,45 @@ export class Slack extends Context.Service<
             )
             .pipe(
               Effect.map((payload) =>
-                payload.messages.map((message) => ({
+                payload.messages.map((message): Found => ({
                   channel,
                   root: message.thread_ts ?? message.ts,
                   message,
                 }))
-              ),
-              Effect.catch(() => Effect.succeed([]))
+              )
             );
 
-        const conversations = [
-          ...[...threads.values()].map(readThread),
-          ...[...dms].map(readDm),
-        ].slice(0, SINCE_MAX_CONVERSATIONS);
+        // A conversation is a thread (channel + root) or a whole DM (channel
+        // only), read once. The ones with a post inside the window go first, so
+        // the conversation cap drops look-back reads before anything posted in
+        // the window.
+        const reads = new Map<string, Effect.Effect<ReadonlyArray<Found>, SlackCallError>>();
+        const add = (key: string, read: () => Effect.Effect<ReadonlyArray<Found>, SlackCallError>) => {
+          if (!reads.has(key)) reads.set(key, read());
+        };
+        const addThread = (channel: string | undefined, root: string) => {
+          if (channel !== undefined) add(`${channel}:${root}`, () => readThread(channel, root));
+        };
+        for (const recent of [true, false]) {
+          for (const post of posts) {
+            if (inWindow(post.ts) !== recent) continue;
+            const root = THREAD_TS_IN_LINK.exec(post.permalink ?? "")?.[1] ?? post.ts;
+            addThread(post.channel?.id, root);
+          }
+          for (const item of activity) {
+            if (inWindow(item.ts) !== recent) continue;
+            if (item.kind === "dm" || item.kind === "bot_dm_bundle") {
+              add(item.channel, () => readDm(item.channel));
+            } else {
+              addThread(item.channel, item.threadTs ?? item.ts);
+            }
+          }
+        }
+
+        const conversations = [...reads.values()]
+          .slice(0, SINCE_MAX_CONVERSATIONS)
+          // One conversation the token cannot read must not lose the rest.
+          .map((read) => read.pipe(Effect.catch(() => Effect.succeed([]))));
         const read = (yield* Effect.all(conversations, { concurrency: HYDRATE_CONCURRENCY })).flat();
 
         // A post found by search and again in its thread is one message; the

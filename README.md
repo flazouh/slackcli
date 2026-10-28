@@ -100,7 +100,8 @@ edit, next to `at`, its post time. Text output prints it beside the time:
 `12:39 (edited 13:57)`. Slack sets this only for edits by people. A bot that
 rewrites its own message, through `chat.update` or a streamed reply, leaves no
 edit time, so its row looks unchanged. To catch those, read a wide window and
-compare each row's `message` with the text you saw last time.
+compare each row's `message` with the text you saw last time. `search` rows
+carry no `editedAt`, because Slack's search results do not include it.
 
 A huddle transcript prints one `[mm:ss] Name: text` line per spoken line, in
 order, with the speaker resolved to a name. Its `--json` form adds a `lines`

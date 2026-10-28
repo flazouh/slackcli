@@ -294,8 +294,10 @@ const editedAnswer = (method: string, params: Params): unknown => {
           },
         ],
       };
+    // Slack returns only replies after `oldest`, so a read from the window
+    // start never sees the answer posted before it.
     case "conversations.replies":
-      return params["ts"] === "1791288000.000100"
+      return params["ts"] === "1791288000.000100" && Number(params["oldest"]) <= 1791288000
         ? {
             ok: true,
             messages: [
@@ -359,4 +361,55 @@ test("since looks back for posts only as far as asked", async () => {
   const view = await runSince(routedApi(editedAnswer), SINCE, 500, 600);
 
   expect(view.rows).toEqual([]);
+});
+
+test("since reads every page of a busy thread, so the look-back does not push out the window", async () => {
+  const api = routedApi((method, params) => {
+    if (method === "conversations.replies" && params["ts"] === "1791288000.000100") {
+      return params["cursor"] === "page2"
+        ? { ok: true, messages: [{ ts: "1791295000.000100", user: "U3", thread_ts: "1791288000.000100", text: "newest reply" }] }
+        : {
+            ok: true,
+            has_more: true,
+            response_metadata: { next_cursor: "page2" },
+            messages: [{ ts: "1791289000.000100", user: "U3", thread_ts: "1791288000.000100", text: "old reply" }],
+          };
+    }
+    return editedAnswer(method, params);
+  });
+
+  const view = await runSince(api, SINCE);
+
+  expect(view.rows.map((row) => row.message)).toEqual(["newest reply"]);
+});
+
+test("since reads a DM written inside the window before threads found only by looking back", async () => {
+  const lookBackThreads = Array.from({ length: 85 }, (_, index) => ({
+    item: {
+      type: "thread_v2",
+      bundle_info: {
+        payload: {
+          thread_entry: { channel_id: "C1", thread_ts: `${1791280000 + index}.000100`, latest_ts: `${1791285000 + index}.000100` },
+        },
+      },
+    },
+  }));
+  const dm = {
+    item: {
+      type: "dm",
+      bundle_info: {
+        payload: { dm_entry: { latest_message: { channel: "D9", ts: "1791297000.000100", author_user_id: "U4", text: "ping" } } },
+      },
+    },
+  };
+  const api = routedApi((method, params) => {
+    if (method === "search.messages") return { ok: true, messages: { total: 0, matches: [] } };
+    if (method === "activity.feed") return { ok: true, items: [dm, ...lookBackThreads] };
+    if (method === "conversations.replies") return { ok: true, messages: [] };
+    return workspace(method, params);
+  });
+
+  const view = await runSince(api, SINCE);
+
+  expect(view.rows.map((row) => [row.channel, row.message])).toEqual([["DM", "ping"]]);
 });

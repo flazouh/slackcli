@@ -4,8 +4,8 @@ This file records user-visible package changes.
 
 ## Unreleased
 
-- Add `editedAt` to every message row (`read`, `thread`, `search`, `mentions`, `inbox`, `since`) when a person edited the message. Text output prints `(edited HH:MM)` next to the time. Slack gives no edit time for a bot that rewrites its own message.
-- `since` returns messages edited inside the window, not only those posted in it. It reads conversations from `--lookback` (default `6h`) before the window to find them.
+- Add `editedAt` to message rows (`read`, `thread`, `mentions`, `inbox`, `since`) when a person edited the message. `search` rows have none, because Slack's search results do not carry it. Text output prints `(edited HH:MM)` next to the time. Slack gives no edit time for a bot that rewrites its own message.
+- `since` returns messages edited inside the window, not only those posted in it. It reads conversations from `--lookback` (default `6h`) before the window to find them, and reads a busy thread past its first 200 replies.
 
 - `read` pages back through `conversations.history` until it has `-n` messages or the conversation has no more. It used to stop at the first screen, about 100 messages.
 - Add `dms` to list your direct and group DMs with the conversation id that `read` takes.
