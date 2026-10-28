@@ -85,6 +85,7 @@ test("since prints every row in full with its channel, and marks the user's own 
           authorId: "UME",
           mine: true,
           at: "2026-10-06T11:00:00.000Z",
+          editedAt: undefined,
           message: long,
           files: [],
         },

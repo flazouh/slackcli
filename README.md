@@ -77,7 +77,7 @@ slackcli search deploy failed -n 20   # search the workspace
 slackcli mentions                     # messages that mention you
 slackcli mentions --unanswered        # only those you have not replied to in their thread
 slackcli inbox                        # the whole activity feed: mentions, replies, DMs, reactions
-slackcli since 3h                     # everything around you in full: your posts, replies, mentions, DMs
+slackcli since 3h                     # everything around you in full: your posts, replies, mentions, DMs, edits
 slackcli file F0123ABCD -o shot.png   # download a file shared on a message
 slackcli file <canvas link> --text    # print a canvas or huddle transcript as plain text
 slackcli huddle <thread link>         # a huddle: attendees, duration, AI notes, transcript
@@ -95,6 +95,13 @@ Message rows carry a `files` array (id, kind, name, title, filetype, mimetype,
 size, permalink). A file-only message reads `[file] shot.png (image/png, 412 KB)`;
 canvases and huddle transcripts show as `[canvas]` and `[transcript]`.
 
+A message that a person edited carries `editedAt`, the ISO time of the last
+edit, next to `at`, its post time. Text output prints it beside the time:
+`12:39 (edited 13:57)`. Slack sets this only for edits by people. A bot that
+rewrites its own message, through `chat.update` or a streamed reply, leaves no
+edit time, so its row looks unchanged. To catch those, read a wide window and
+compare each row's `message` with the text you saw last time.
+
 A huddle transcript prints one `[mm:ss] Name: text` line per spoken line, in
 order, with the speaker resolved to a name. Its `--json` form adds a `lines`
 array (`at`, `offsetSeconds`, `speakerId`, `speaker`, `text`). Slack serves the
@@ -108,6 +115,12 @@ canvas text read as `@name` instead of `@U0123ABCD`.
 posts through search, so a post made in the last few seconds can be missing
 until Slack indexes it. It keeps the newest `--limit` messages (default 500)
 and says how many older ones it cut.
+
+`since` also returns a message that was posted before the window and edited
+inside it, because an edit keeps the post time. It reads conversations from
+`--lookback` before the window (default `6h`) and keeps a row from that stretch
+only when its `editedAt` is inside the window. An edited row sorts by its edit
+time. `--lookback 0m` turns this off.
 
 A channel accepts a name such as `project-alpha`, `#project-alpha`, or its id.
 A thread is addressed by any Slack link, including the one this tool prints, or

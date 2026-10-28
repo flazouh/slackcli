@@ -4,7 +4,7 @@ import { FetchHttpClient } from "effect/unstable/http";
 
 import { WriteNotConfirmed } from "../domain/errors.ts";
 import { parseFileTarget } from "../domain/file-text.ts";
-import { parseSince } from "../domain/since.ts";
+import { parseDuration, parseSince } from "../domain/since.ts";
 import { parseMessageTarget, parseThreadTarget } from "../domain/thread-target.ts";
 import { ChannelDirectory } from "../services/channel-directory.ts";
 import { writeSession } from "../services/credentials.ts";
@@ -185,17 +185,24 @@ const since = Command.make(
       Flag.withDefault(500),
       Flag.withDescription("Maximum messages to return; the newest are kept")
     ),
+    lookback: Flag.string("lookback").pipe(
+      Flag.withDefault("6h"),
+      Flag.withDescription(
+        "How far before the window to look for posts edited inside it (6h, 90m, 0m)"
+      )
+    ),
     json,
   },
   Effect.fn("since")(function* (config) {
     const start = yield* Effect.fromResult(parseSince(config.when, new Date()));
+    const lookback = yield* Effect.fromResult(parseDuration(config.lookback));
     const slack = yield* Slack;
-    const view = yield* slack.since(start, config.limit);
+    const view = yield* slack.since(start, config.limit, lookback);
     yield* show(view, config.json, () => renderSince(view, layout({ full: true })));
   })
 ).pipe(
   Command.withDescription(
-    "Everything around you since a time, in full: your posts, replies in your threads, mentions, DMs"
+    "Everything around you since a time, in full: your posts, replies in your threads, mentions, DMs, and messages edited since then"
   )
 );
 

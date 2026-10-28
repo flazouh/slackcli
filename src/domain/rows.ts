@@ -19,6 +19,8 @@ export interface MessageRow {
   /** Present on a message that started a thread, so the reader knows to open it. */
   readonly replies: number | undefined;
   readonly files: ReadonlyArray<FileRow>;
+  /** When a person last edited the message; a bot's rewrite leaves it unset. */
+  readonly editedAt?: string | undefined;
 }
 
 export interface SearchRow {
@@ -28,6 +30,7 @@ export interface SearchRow {
   readonly at: string;
   readonly url: string | undefined;
   readonly files: ReadonlyArray<FileRow>;
+  readonly editedAt?: string | undefined;
 }
 
 export interface MentionRow {
@@ -39,6 +42,7 @@ export interface MentionRow {
   readonly at: string;
   readonly url: string;
   readonly files: ReadonlyArray<FileRow>;
+  readonly editedAt?: string | undefined;
 }
 
 /**
@@ -48,6 +52,9 @@ export interface MentionRow {
  */
 export const isChannelLevel = (message: SlackMessage): boolean =>
   message.thread_ts === undefined || message.thread_ts === message.ts;
+
+export const editedAt = (message: { readonly edited?: { readonly ts: string } }): string | undefined =>
+  message.edited === undefined ? undefined : slackTsToIso(message.edited.ts);
 
 const authorOf = (message: SlackMessage, people: PeopleIndex): string => {
   const known = message.user ? people.get(message.user) : undefined;
@@ -67,6 +74,7 @@ export const historyRows = (
       url: permalink(context.workspace, context.channelId, message.ts),
       replies: message.reply_count,
       files: fileRows(message.files),
+      editedAt: editedAt(message),
     }));
 
 export const searchRows = (
@@ -82,6 +90,7 @@ export const searchRows = (
     at: slackTsToIso(match.ts),
     url: match.permalink,
     files: fileRows(match.files),
+    editedAt: editedAt(match),
   }));
 
 /**
@@ -129,6 +138,8 @@ export interface ActivityTarget {
   readonly text: string | undefined;
   /** Only known once the item is hydrated from its message; the feed never carries files. */
   readonly files?: ReadonlyArray<SlackFile> | undefined;
+  /** Slack's `edited.ts`, also only known once the item is hydrated. */
+  readonly editedTs?: string | undefined;
   readonly reactorId: string | undefined;
   readonly reactionName: string | undefined;
   readonly unreadCount: number | undefined;
@@ -263,5 +274,6 @@ export const mentionRows = (
       at: slackTsToIso(target.ts),
       url: permalink(context.workspace, target.channel, target.ts, target.threadTs),
       files: fileRows(target.files),
+      editedAt: target.editedTs === undefined ? undefined : slackTsToIso(target.editedTs),
     };
   });

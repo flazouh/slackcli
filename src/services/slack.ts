@@ -34,6 +34,7 @@ import {
   activityPeopleIds,
   activityTargets,
   channelLabel,
+  editedAt,
   historyRows,
   isChannelLevel,
   mentionRows,
@@ -138,6 +139,11 @@ export interface SinceRow {
   /** True for the signed-in user's own posts. */
   readonly mine: boolean;
   readonly at: string;
+  /**
+   * Set when a person edited the message. A row posted before the window is
+   * listed only because this falls inside it.
+   */
+  readonly editedAt: string | undefined;
   readonly message: string;
   readonly files: ReadonlyArray<FileRow>;
 }
@@ -218,6 +224,13 @@ const DM_PAGE = 200;
 /** A group DM's name is `mpdm-first--second--third-1`. */
 const GROUP_DM_NAME = /^mpdm-(.*)-\d+$/;
 
+/**
+ * How far before a `since` window to look for posts that were edited inside it.
+ * Slack keeps a message's post time when it is edited, and a bot often posts
+ * "Working…" and edits that same message into its answer minutes later.
+ */
+export const SINCE_LOOKBACK_SECONDS = 6 * 3600;
+
 /** Threads and DMs read for one `since` window, so a busy day stays bounded. */
 const SINCE_MAX_CONVERSATIONS = 80;
 /** Feed items read for one `since` window: about two weeks of a busy feed. */
@@ -271,7 +284,11 @@ export class Slack extends Context.Service<
     readonly fileText: (id: string) => Effect.Effect<FileTextView, SlackCallError>;
     readonly huddle: (target: ThreadTarget) => Effect.Effect<HuddleView, SlackCallError>;
     /** Everything around the signed-in user since a Unix time, oldest first. */
-    readonly since: (sinceSeconds: number, limit: number) => Effect.Effect<SinceView, SlackCallError>;
+    readonly since: (
+      sinceSeconds: number,
+      limit: number,
+      lookbackSeconds?: number
+    ) => Effect.Effect<SinceView, SlackCallError>;
   }
 >()("slackcli/Slack") {
   static readonly layer: Layer.Layer<
@@ -522,6 +539,7 @@ export class Slack extends Context.Service<
             ...target,
             text: messageText(found),
             files: found.files,
+            editedTs: found.edited?.ts,
             authorId: target.authorId ?? found.user,
           } satisfies ActivityTarget;
         });
@@ -879,37 +897,56 @@ export class Slack extends Context.Service<
        * posted in, were mentioned in or follow (from the activity feed), and
        * their DMs. Each conversation is read once, whole from the window start,
        * so nothing is clipped and replies by others come with it.
+       *
+       * A message counts when it was posted or edited inside the window. Edits
+       * keep the post time, so conversations are found and read from
+       * `lookbackSeconds` before the window, and a row from that stretch stays
+       * only when Slack says it was edited inside the window.
        */
-      const since = Effect.fn("Slack.since")(function* (sinceSeconds: number, limit: number) {
+      const since = Effect.fn("Slack.since")(function* (
+        sinceSeconds: number,
+        limit: number,
+        lookbackSeconds: number = SINCE_LOOKBACK_SECONDS
+      ) {
         const until = Date.now() / 1000;
+        const readFrom = sinceSeconds - lookbackSeconds;
         const inWindow = (ts: string) => Number(ts) >= sinceSeconds;
+        const inReach = (ts: string) => Number(ts) >= readFrom;
+        const changedInWindow = (message: SlackMessage) =>
+          inWindow(message.ts) || (message.edited !== undefined && inWindow(message.edited.ts));
         const identity = yield* api.call(slackCall("auth.test", {}, AuthTestPayload));
 
         const ownPosts = searchMatches(
-          `from:me after:${searchDay(sinceSeconds)}`,
+          `from:me after:${searchDay(readFrom)}`,
           SEARCH_PAGE * SEARCH_MAX_PAGES,
-          (oldest) => !inWindow(oldest.ts)
-        ).pipe(Effect.map(({ matches }) => matches.filter((match) => inWindow(match.ts))));
+          (oldest) => !inReach(oldest.ts)
+        ).pipe(Effect.map(({ matches }) => matches.filter((match) => inReach(match.ts))));
 
-        const feed = readFeed(SINCE_FEED_ITEMS, SINCE_ACTIVITY_TYPES, sinceSeconds).pipe(
-          Effect.map((items) => activityTargets(items).filter((item) => inWindow(item.ts)))
+        const feed = readFeed(SINCE_FEED_ITEMS, SINCE_ACTIVITY_TYPES, readFrom).pipe(
+          Effect.map((items) => activityTargets(items).filter((item) => inReach(item.ts)))
         );
 
         const [posts, activity] = yield* Effect.all([ownPosts, feed], { concurrency: 2 });
 
         // A conversation is a thread (channel + root) or a whole DM (channel only).
+        // The ones with a post inside the window go first, so the conversation
+        // cap drops look-back reads before anything posted in the window.
         const threads = new Map<string, { readonly channel: string; readonly root: string }>();
         const dms = new Set<string>();
         const addThread = (channel: string | undefined, root: string) => {
           if (channel !== undefined) threads.set(`${channel}:${root}`, { channel, root });
         };
-        for (const post of posts) {
-          const root = THREAD_TS_IN_LINK.exec(post.permalink ?? "")?.[1] ?? post.ts;
-          addThread(post.channel?.id, root);
-        }
-        for (const item of activity) {
-          if (item.kind === "dm" || item.kind === "bot_dm_bundle") dms.add(item.channel);
-          else addThread(item.channel, item.threadTs ?? item.ts);
+        for (const recent of [true, false]) {
+          for (const post of posts) {
+            if (inWindow(post.ts) !== recent) continue;
+            const root = THREAD_TS_IN_LINK.exec(post.permalink ?? "")?.[1] ?? post.ts;
+            addThread(post.channel?.id, root);
+          }
+          for (const item of activity) {
+            if (inWindow(item.ts) !== recent) continue;
+            if (item.kind === "dm" || item.kind === "bot_dm_bundle") dms.add(item.channel);
+            else addThread(item.channel, item.threadTs ?? item.ts);
+          }
         }
 
         const readThread = (thread: { readonly channel: string; readonly root: string }) =>
@@ -917,7 +954,7 @@ export class Slack extends Context.Service<
             .call(
               slackCall(
                 "conversations.replies",
-                { channel: thread.channel, ts: thread.root, oldest: sinceSeconds, limit: THREAD_PAGE },
+                { channel: thread.channel, ts: thread.root, oldest: readFrom, limit: THREAD_PAGE },
                 HistoryPayload
               )
             )
@@ -934,7 +971,7 @@ export class Slack extends Context.Service<
             .call(
               slackCall(
                 "conversations.history",
-                { channel, oldest: sinceSeconds, limit: THREAD_PAGE },
+                { channel, oldest: readFrom, limit: THREAD_PAGE },
                 HistoryPayload
               )
             )
@@ -963,7 +1000,7 @@ export class Slack extends Context.Service<
         >();
         for (const post of posts) {
           const channel = post.channel?.id;
-          if (channel === undefined) continue;
+          if (channel === undefined || !inWindow(post.ts)) continue;
           const root = THREAD_TS_IN_LINK.exec(post.permalink ?? "")?.[1] ?? post.ts;
           const { channel: _where, ...fields } = post;
           found.set(`${channel}:${post.ts}`, {
@@ -973,11 +1010,16 @@ export class Slack extends Context.Service<
           });
         }
         for (const entry of read) {
-          if (inWindow(entry.message.ts)) found.set(`${entry.channel}:${entry.message.ts}`, entry);
+          if (changedInWindow(entry.message)) {
+            found.set(`${entry.channel}:${entry.message.ts}`, entry);
+          }
         }
 
+        // An edit is the newest thing that happened to a message, so an edited
+        // row sits where the edit happened, not where the post did.
+        const changedAt = (message: SlackMessage) => Number(message.edited?.ts ?? message.ts);
         const ordered = [...found.values()].sort(
-          (left, right) => Number(left.message.ts) - Number(right.message.ts)
+          (left, right) => changedAt(left.message) - changedAt(right.message)
         );
         const kept = ordered.slice(Math.max(0, ordered.length - limit));
 
@@ -1002,6 +1044,7 @@ export class Slack extends Context.Service<
             authorId: message.user,
             mine: message.user === identity.user_id,
             at: slackTsToIso(message.ts),
+            editedAt: editedAt(message),
             message: readableMessage(message, people),
             files: fileRows(message.files),
           })),

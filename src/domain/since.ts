@@ -1,9 +1,18 @@
 import { Result } from "effect";
 
-import { SinceInvalid } from "./errors.ts";
+import { DurationInvalid, SinceInvalid } from "./errors.ts";
 
 const DURATION = /^(\d+(?:\.\d+)?)\s*([smhd])$/i;
 const UNIT_SECONDS: Readonly<Record<string, number>> = { s: 1, m: 60, h: 3600, d: 86_400 };
+
+/** A duration such as `6h`, `90m` or `1d`, in seconds. */
+export const parseDuration = (value: string): Result.Result<number, DurationInvalid> => {
+  const duration = DURATION.exec(value.trim());
+  if (duration?.[1] === undefined || duration[2] === undefined) {
+    return Result.fail(new DurationInvalid({ value }));
+  }
+  return Result.succeed(Number(duration[1]) * (UNIT_SECONDS[duration[2].toLowerCase()] ?? 0));
+};
 
 /**
  * The start of a `since` window, in Unix seconds: a duration counted back from
@@ -12,11 +21,8 @@ const UNIT_SECONDS: Readonly<Record<string, number>> = { s: 1, m: 60, h: 3600, d
  */
 export const parseSince = (value: string, now: Date): Result.Result<number, SinceInvalid> => {
   const trimmed = value.trim();
-  const duration = DURATION.exec(trimmed);
-  if (duration?.[1] !== undefined && duration[2] !== undefined) {
-    const seconds = Number(duration[1]) * (UNIT_SECONDS[duration[2].toLowerCase()] ?? 0);
-    return Result.succeed(now.getTime() / 1000 - seconds);
-  }
+  const duration = parseDuration(trimmed);
+  if (Result.isSuccess(duration)) return Result.succeed(now.getTime() / 1000 - duration.success);
   if (/^\d{4}-\d{2}-\d{2}T/.test(trimmed)) {
     const parsed = Date.parse(trimmed);
     if (!Number.isNaN(parsed)) return Result.succeed(parsed / 1000);

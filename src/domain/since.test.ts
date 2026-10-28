@@ -1,7 +1,7 @@
 import { expect, test } from "bun:test";
 import { Result } from "effect";
 
-import { parseSince, searchDay } from "./since.ts";
+import { parseDuration, parseSince, searchDay } from "./since.ts";
 
 const now = new Date("2026-10-06T12:00:00.000Z");
 const at = (value: string) => {
@@ -27,4 +27,10 @@ test("anything else is rejected", () => {
 
 test("the search day starts early enough for any time zone, because Slack's after: is a local date", () => {
   expect(searchDay(Date.parse("2026-10-06T09:00:00Z") / 1000)).toBe("2026-10-04");
+});
+
+test("a look-back is a duration and never a time", () => {
+  expect(Result.getOrUndefined(parseDuration("6h"))).toBe(21_600);
+  expect(Result.getOrUndefined(parseDuration("0m"))).toBe(0);
+  expect(Result.isFailure(parseDuration("2026-10-06T08:15:00Z"))).toBe(true);
 });
