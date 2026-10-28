@@ -49,3 +49,10 @@ test("since rejects a value that is not a time before it reads credentials", asy
   expect(result.exitCode).not.toBe(0);
   expect(result.stderr).toContain("Not a time: yesterday");
 });
+
+test("since rejects a look-back that is not a duration before it reads credentials", async () => {
+  const result = await runCli(["since", "2h", "--lookback", "2026-10-06T08:00:00Z"]);
+
+  expect(result.exitCode).not.toBe(0);
+  expect(result.stderr).toContain("Not a duration: 2026-10-06T08:00:00Z");
+});

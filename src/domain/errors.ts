@@ -64,6 +64,10 @@ export class SinceInvalid extends Data.TaggedError("SinceInvalid")<{
   readonly value: string;
 }> {}
 
+export class DurationInvalid extends Data.TaggedError("DurationInvalid")<{
+  readonly value: string;
+}> {}
+
 /**
  * A write was requested without `--yes`.
  */
@@ -86,6 +90,7 @@ type SlackcliError =
   | ThreadTargetInvalid
   | FileTargetInvalid
   | SinceInvalid
+  | DurationInvalid
   | WriteNotConfirmed;
 
 /**
@@ -117,6 +122,8 @@ const MESSAGES: {
     `Not a Slack file reference: ${error.value}. Use a file id such as F0123ABCD, or the file's link`,
   SinceInvalid: (error) =>
     `Not a time: ${error.value}. Use a duration such as 3h, 90m or 1d, or an ISO time such as 2026-10-06T08:00:00Z`,
+  DurationInvalid: (error) =>
+    `Not a duration: ${error.value}. Use a duration such as 6h, 90m or 1d`,
   WriteNotConfirmed: (error) =>
     `Nothing was sent. Re-run \`slackcli ${error.action}\` with --yes to post it.`,
 };

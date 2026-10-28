@@ -37,6 +37,20 @@ const clock = (iso: string, now: Date): string => {
   return `${at.toLocaleDateString([], { month: "short", day: "2-digit" })} ${time}`;
 };
 
+/**
+ * The time column. An edited message keeps its post time, so the edit time is
+ * printed beside it; without it a bot's answer reads as its "Working…" post.
+ */
+const stamp = (
+  row: { readonly at: string; readonly editedAt?: string | undefined },
+  now: Date
+): string => {
+  if (row.editedAt === undefined) return clock(row.at, now);
+  // Measured against the post rather than today, so a same-day edit of an
+  // older post prints its time once, not its date twice.
+  return `${clock(row.at, now)} (edited ${clock(row.editedAt, new Date(row.at))})`;
+};
+
 const pad = (value: string, width: number): string =>
   value.length >= width ? value.slice(0, width) : value + " ".repeat(width - value.length);
 
@@ -114,10 +128,14 @@ const line = (
  * would indent each wrapped message to a different column.
  */
 const columnsFor = (
-  rows: ReadonlyArray<{ readonly author: string; readonly at: string }>,
+  rows: ReadonlyArray<{
+    readonly author: string;
+    readonly at: string;
+    readonly editedAt?: string | undefined;
+  }>,
   now: Date
 ): Columns => ({
-  time: Math.max(...rows.map((row) => clock(row.at, now).length)),
+  time: Math.max(...rows.map((row) => stamp(row, now).length)),
   author: Math.min(AUTHOR_WIDTH, Math.max(6, ...rows.map((row) => row.author.length))),
 });
 
@@ -144,7 +162,7 @@ export const renderMessages = (
     return line(
       options.paint,
       {
-        time: clock(row.at, options.now),
+        time: stamp(row, options.now),
         author: row.author,
         message: `${body(row.message, options)}${thread}`,
       },
@@ -167,7 +185,7 @@ export const renderSearch = (
   const found = rows.flatMap((row) => {
     const first = line(
       options.paint,
-      { time: clock(row.at, options.now), author: row.author, message: body(row.message, options) },
+      { time: stamp(row, options.now), author: row.author, message: body(row.message, options) },
       columns
     );
     const where = options.paint.dim(`   ${row.channel}`);
@@ -192,7 +210,7 @@ export const renderMentions = (
         options.paint,
         {
           mark: row.unread ? options.paint.accent("●") : " ",
-          time: clock(row.at, options.now),
+          time: stamp(row, options.now),
           author: row.author,
           message: body(row.message, options),
         },
@@ -267,7 +285,7 @@ export const renderSince = (view: SinceView, options: RenderOptions): string => 
       paint,
       {
         mark: row.mine ? paint.accent("›") : " ",
-        time: clock(row.at, options.now),
+        time: stamp(row, options.now),
         author: row.author,
         message: tidy(row.message),
       },

@@ -361,6 +361,57 @@ test("thread marks a partial Slack page as an incomplete total", async () => {
   expect(view.rows.map((row) => row.message)).toEqual(["root", "latest reply"]);
 });
 
+test("thread rows carry the time Slack says a message was edited", async () => {
+  const api = stubApi({
+    "conversations.replies": [
+      {
+        ok: true,
+        messages: [
+          { ts: "1700000000.000000", user: "U1", text: "root", edited: { user: "U1", ts: "1700000600.000000" } },
+          { ts: "1700000001.000000", user: "U1", text: "never edited" },
+        ],
+      },
+    ],
+    "users.info": [{ ok: true, user: { id: "U1", real_name: "Adam" } }],
+  });
+
+  const view = await run((slack) => slack.thread(threadTarget("C1:1700000000.000000"), 20), api);
+
+  expect(view.rows.map((row) => row.editedAt)).toEqual(["2023-11-14T22:23:20.000Z", undefined]);
+});
+
+test("activity rows carry the edit time of the message they point at", async () => {
+  const api = stubApi({
+    "activity.feed": [
+      {
+        ok: true,
+        items: [
+          {
+            item: {
+              type: "at_user",
+              message: { channel: "C1", ts: "2.000000", thread_ts: "1.000000", author_user_id: "U3" },
+            },
+          },
+        ],
+      },
+    ],
+    "conversations.replies": [
+      {
+        ok: true,
+        messages: [{ ts: "2.000000", user: "U3", text: "<@U1> done", edited: { user: "U3", ts: "900.000000" } }],
+      },
+    ],
+    "users.info": [
+      { ok: true, user: { id: "U3", real_name: "Reply Author" } },
+      { ok: true, user: { id: "U1", real_name: "Alex" } },
+    ],
+  });
+
+  const view = await run((slack) => slack.activity(20, "mentions"), api);
+
+  expect(view.rows[0]?.editedAt).toBe("1970-01-01T00:15:00.000Z");
+});
+
 test("send resolves a channel and returns a reusable message link", async () => {
   const api = stubApi({
     "chat.postMessage": [

@@ -127,6 +127,16 @@ export const HuddleRoom = Schema.Struct({
 export type HuddleRoom = typeof HuddleRoom.Type;
 
 /**
+ * Set when a person edited the message; `ts` is when. Slack leaves it off a
+ * message a bot rewrote through `chat.update` or a stream, so its absence does
+ * not prove the text is the one first posted.
+ */
+export const MessageEdit = Schema.Struct({
+  ts: Schema.String,
+  user: Schema.optionalKey(Schema.String),
+});
+
+/**
  * The fields slackcli reads off any Slack message, whatever endpoint produced
  * it. `ts` is the only field Slack always sends.
  */
@@ -145,6 +155,7 @@ export const SlackMessage = Schema.Struct({
   files: Schema.optionalKey(Schema.Array(SlackFile)),
   subtype: Schema.optionalKey(Schema.String),
   room: Schema.optionalKey(HuddleRoom),
+  edited: Schema.optionalKey(MessageEdit),
 }).annotate({ identifier: "SlackMessage" });
 export type SlackMessage = typeof SlackMessage.Type;
 
@@ -185,6 +196,9 @@ export const ResponseEnvelope = Schema.Struct({
 export const HistoryPayload = Schema.Struct({
   messages: Schema.Array(SlackMessage),
   has_more: Schema.optionalKey(Schema.Boolean),
+  response_metadata: Schema.optionalKey(
+    Schema.Struct({ next_cursor: Schema.optionalKey(Schema.String) })
+  ),
 });
 
 /**
