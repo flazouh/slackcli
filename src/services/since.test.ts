@@ -35,7 +35,12 @@ const channels = Layer.succeed(ChannelDirectory)({
   refresh: Effect.die("since must not refresh channels"),
 });
 
-const runSince = (api: ReturnType<typeof routedApi>, since: number, limit = 500) => {
+const runSince = (
+  api: ReturnType<typeof routedApi>,
+  since: number,
+  limit = 500,
+  lookbackSeconds?: number
+) => {
   const users = UserDirectory.layer.pipe(Layer.provide(api.layer));
   const layer = Slack.layer.pipe(
     Layer.provide(api.layer),
@@ -43,7 +48,7 @@ const runSince = (api: ReturnType<typeof routedApi>, since: number, limit = 500)
     Layer.provide(users)
   );
   return Effect.gen(function* () {
-    return yield* (yield* Slack).since(since, limit);
+    return yield* (yield* Slack).since(since, limit, lookbackSeconds);
   }).pipe(Effect.provide(layer), Effect.runPromise);
 };
 
@@ -262,4 +267,96 @@ test("since reads the activity feed 50 items at a time and follows its cursor to
     [50, "page2"],
   ]);
   expect(view.rows.map((row) => row.message)).toContain("page two mention");
+});
+
+/**
+ * A bot answers by posting "Working…" and editing that same message into its
+ * answer, so the post time stays before the window while the answer lands
+ * inside it. The thread is found through the feed item of that post.
+ */
+const editedAnswer = (method: string, params: Params): unknown => {
+  switch (method) {
+    case "search.messages":
+      return { ok: true, messages: { total: 0, matches: [] } };
+    case "activity.feed":
+      return {
+        ok: true,
+        items: [
+          {
+            item: {
+              type: "thread_v2",
+              bundle_info: {
+                payload: {
+                  thread_entry: { channel_id: "C1", thread_ts: "1791288000.000100", latest_ts: "1791289000.000100" },
+                },
+              },
+            },
+          },
+        ],
+      };
+    case "conversations.replies":
+      return params["ts"] === "1791288000.000100"
+        ? {
+            ok: true,
+            messages: [
+              { ts: "1791288000.000100", user: "UME", text: "<@U3> add the org" },
+              {
+                ts: "1791289000.000100",
+                user: "U3",
+                thread_ts: "1791288000.000100",
+                text: "Done. Added the org.",
+                edited: { user: "U3", ts: "1791293000.000000" },
+              },
+              {
+                ts: "1791289500.000100",
+                user: "U4",
+                thread_ts: "1791288000.000100",
+                text: "fixed a typo before the window",
+                edited: { user: "U4", ts: "1791289600.000000" },
+              },
+            ],
+          }
+        : undefined;
+    default:
+      return workspace(method, params);
+  }
+};
+
+test("since lists a message posted before the window and edited inside it, with its edit time", async () => {
+  const view = await runSince(routedApi(editedAnswer), SINCE);
+
+  expect(view.rows.map((row) => [row.author, row.message, row.at, row.editedAt])).toEqual([
+    ["Lab", "Done. Added the org.", "2026-10-06T12:16:40.000Z", "2026-10-06T13:23:20.000Z"],
+  ]);
+});
+
+test("since sorts an edited message by its edit time", async () => {
+  const api = routedApi((method, params) => {
+    if (method === "conversations.replies" && params["ts"] === "1791288000.000100") {
+      return {
+        ok: true,
+        messages: [
+          { ts: "1791291000.000100", user: "U4", thread_ts: "1791288000.000100", text: "posted in the window" },
+          {
+            ts: "1791290500.000100",
+            user: "U3",
+            thread_ts: "1791288000.000100",
+            text: "edited after the other",
+            edited: { user: "U3", ts: "1791292000.000000" },
+          },
+        ],
+      };
+    }
+    return editedAnswer(method, params);
+  });
+
+  const view = await runSince(api, SINCE);
+
+  expect(view.rows.map((row) => row.message)).toEqual(["posted in the window", "edited after the other"]);
+});
+
+test("since looks back for posts only as far as asked", async () => {
+  const view = await runSince(routedApi(editedAnswer), SINCE, 500, 600);
+
+  expect(view.rows).toEqual([]);
 });

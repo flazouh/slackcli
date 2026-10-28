@@ -97,3 +97,15 @@ test("since prints every row in full with its channel, and marks the user's own 
   expect(output).toContain("#proj-ori");
   expect(output).toContain("3 older messages cut");
 });
+
+test("a row Slack marks as edited shows its edit time next to its own", () => {
+  const output = renderMessages(
+    "#team",
+    [{ ...row("answer"), editedAt: "2026-08-17T11:59:30.000Z" }],
+    options
+  );
+  const clock = (iso: string) =>
+    new Date(iso).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", hour12: false });
+
+  expect(output).toContain(`${clock("2026-08-17T11:59:00.000Z")} (edited ${clock("2026-08-17T11:59:30.000Z")})`);
+});
