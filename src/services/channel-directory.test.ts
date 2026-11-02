@@ -17,7 +17,7 @@ test("a resolve-triggered refresh also updates the names view", async () => {
       const channels = calls === 1 ? [] : [{ id: "C0NEW1", name: "new-channel" }];
       return request.decode({ ok: true, channels }).pipe(Effect.orDie);
     },
-    workspaceRef: Effect.succeed("T1"),
+    linkHost: Effect.succeed("acme.slack.com"),
     session: Effect.die("the directory must not read credentials"),
     download: () => Effect.die("the directory must not download files"),
   });

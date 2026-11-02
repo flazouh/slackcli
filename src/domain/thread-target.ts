@@ -90,16 +90,18 @@ export const parseMessageTarget = (
 };
 
 /**
- * Slack permalinks encode the timestamp with the dot removed. A link to a reply
- * carries the thread root the way Slack's own "Copy link" does, so pasting the
- * link back into `slackcli thread` opens the thread and not the lone reply.
+ * The link Slack's own "Copy link" gives: `https://<host>/archives/<channel>/p<ts>`,
+ * with the dot removed from the timestamp. Slack opens it in the browser and in the
+ * app; an `app.slack.com/client/<id>/<channel>/p<ts>` path does not open the message.
+ * A link to a reply carries the thread root and channel the same way, so pasting it
+ * back into `slackcli thread` opens the thread and not the lone reply.
  */
 export const permalink = (
-  workspace: string,
+  host: string,
   channel: string,
   ts: string,
   threadTs?: string
 ): string => {
-  const url = `https://app.slack.com/client/${workspace}/${channel}/p${ts.replace(".", "")}`;
-  return threadTs === undefined || threadTs === ts ? url : `${url}?thread_ts=${threadTs}`;
+  const url = `https://${host}/archives/${channel}/p${ts.replace(".", "")}`;
+  return threadTs === undefined || threadTs === ts ? url : `${url}?thread_ts=${threadTs}&cid=${channel}`;
 };

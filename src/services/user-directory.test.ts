@@ -23,7 +23,7 @@ const stubApi = (options: { readonly fails?: ReadonlySet<string> } = {}) => {
 
       return request.decode({ ok: true, user: { id, name: id.toLowerCase() } }).pipe(Effect.orDie);
     },
-    workspaceRef: Effect.succeed("T1"),
+    linkHost: Effect.succeed("acme.slack.com"),
     session: Effect.die("the directory must not read credentials"),
     download: () => Effect.die("the directory must not download files"),
   });

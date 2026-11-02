@@ -36,7 +36,7 @@ test("a huddle prints attendees, duration, notes and transcript, and names what 
   const output = renderHuddle(
     {
       channel: "#proj-ori",
-      url: "https://app.slack.com/client/E1/C1/p1791301348609899",
+      url: "https://acme.slack.com/archives/C1/p1791301348609899",
       isHuddle: true,
       attendees: ["Alex", "Lab"],
       startedAt: "2026-10-06T10:22:28.000Z",
@@ -79,8 +79,8 @@ test("since prints every row in full with its channel, and marks the user's own 
         {
           channel: "#proj-ori",
           channelId: "C1",
-          thread: "https://app.slack.com/client/E1/C1/p1",
-          url: "https://app.slack.com/client/E1/C1/p1",
+          thread: "https://acme.slack.com/archives/C1/p1",
+          url: "https://acme.slack.com/archives/C1/p1",
           author: "Alex",
           authorId: "UME",
           mine: true,

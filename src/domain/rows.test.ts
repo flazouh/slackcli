@@ -114,7 +114,7 @@ test("renders channel history oldest-first with resolved authors and permalinks"
       {
         people: people({ U00000001: "First User", U00000002: "Second User" }),
         channelId: "C00000001",
-        workspace: "T00000001",
+        linkHost: "acme.slack.com",
       }
     )
   ).toEqual([
@@ -122,7 +122,7 @@ test("renders channel history oldest-first with resolved authors and permalinks"
       author: "Second User",
       message: "older @First User",
       at: "2023-11-14T22:13:21.000Z",
-      url: "https://app.slack.com/client/T00000001/C00000001/p1700000001000001",
+      url: "https://acme.slack.com/archives/C00000001/p1700000001000001",
       replies: undefined,
       files: [],
     },
@@ -130,11 +130,26 @@ test("renders channel history oldest-first with resolved authors and permalinks"
       author: "First User",
       message: "newer",
       at: "2023-11-14T22:13:22.000Z",
-      url: "https://app.slack.com/client/T00000001/C00000001/p1700000002000002",
+      url: "https://acme.slack.com/archives/C00000001/p1700000002000002",
       replies: undefined,
       files: [],
     },
   ]);
+});
+
+test("a reply in a thread links to its thread, so Slack opens it there", () => {
+  const [root, reply] = historyRows(
+    [
+      { ts: "1700000001.000001", thread_ts: "1700000001.000001", user: "U00000001", text: "root" },
+      { ts: "1700000002.000002", thread_ts: "1700000001.000001", user: "U00000001", text: "reply" },
+    ],
+    { people: people({ U00000001: "First User" }), channelId: "C00000001", linkHost: "acme.slack.com" }
+  );
+
+  expect(root?.url).toBe("https://acme.slack.com/archives/C00000001/p1700000001000001");
+  expect(reply?.url).toBe(
+    "https://acme.slack.com/archives/C00000001/p1700000002000002?thread_ts=1700000001.000001&cid=C00000001"
+  );
 });
 
 test("labels history authored by a bot without a user id", () => {
@@ -142,14 +157,14 @@ test("labels history authored by a bot without a user id", () => {
     historyRows([{ ts: "1700000001.000001", bot_id: "B00000001", username: "build-bot", text: "hi" }], {
       people: new Map(),
       channelId: "C00000001",
-      workspace: "T00000001",
+      linkHost: "acme.slack.com",
     })
   ).toEqual([
     {
       author: "build-bot",
       message: "hi",
       at: "2023-11-14T22:13:21.000Z",
-      url: "https://app.slack.com/client/T00000001/C00000001/p1700000001000001",
+      url: "https://acme.slack.com/archives/C00000001/p1700000001000001",
       replies: undefined,
       files: [],
     },
@@ -181,7 +196,7 @@ test("renders activity items with human labels, channel names and cleaned text",
       {
         people: people({ U00000001: "First User", U00000002: "Second User" }),
         channels: new Map([["C00000001", "general"]]),
-        workspace: "T00000001",
+        linkHost: "acme.slack.com",
       }
     )
   ).toEqual([
@@ -192,7 +207,7 @@ test("renders activity items with human labels, channel names and cleaned text",
       author: "First User",
       message: "@channel Welcome @Second User here",
       at: "2023-11-14T22:13:31.000Z",
-      url: "https://app.slack.com/client/T00000001/C00000001/p1700000011000001",
+      url: "https://acme.slack.com/archives/C00000001/p1700000011000001",
       files: [],
     },
     {
@@ -202,7 +217,7 @@ test("renders activity items with human labels, channel names and cleaned text",
       author: "Slack bot",
       message: "Open in Slack for message text.",
       at: "2023-11-14T22:13:30.000Z",
-      url: "https://app.slack.com/client/T00000001/C00000001/p1700000010000000",
+      url: "https://acme.slack.com/archives/C00000001/p1700000010000000",
       files: [],
     },
   ]);
@@ -239,7 +254,7 @@ test("a thread bundle points at the reply that caused the notification", () => {
   const [row] = mentionRows(target === undefined ? [] : [{ ...target, text: "checks passed" }], {
     people: new Map(),
     channels: new Map([["C00000001", "project-alpha"]]),
-    workspace: "T00000001",
+    linkHost: "acme.slack.com",
   });
 
   expect(row?.notification).toBe("Thread reply (4 unread)");
@@ -265,7 +280,7 @@ test("a reaction names whoever reacted, with the emoji", () => {
   const [row] = mentionRows(targets, {
     people: people({ U00000007: "Reaction Author" }),
     channels: new Map([["C00000002", "team-updates"]]),
-    workspace: "T00000001",
+    linkHost: "acme.slack.com",
   });
 
   expect(row).toMatchObject({
@@ -299,7 +314,7 @@ test("a direct message bundle keeps the text it already carries", () => {
     {
       people: people({ U00000003: "Example User" }),
       channels: new Map(),
-      workspace: "T00000001",
+      linkHost: "acme.slack.com",
     }
   );
 

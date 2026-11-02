@@ -4,6 +4,7 @@ This file records user-visible package changes.
 
 ## Unreleased
 
+- Message links are now Slack's own permalink form, `https://<workspace>.slack.com/archives/<channel>/p<ts>`, which opens the message in the browser and the app. The old `app.slack.com/client/<id>/<channel>/p<ts>` links did not open the message. A reply's link carries `thread_ts` and `cid`, also in `read` and `thread`, so it opens in its thread.
 - Add `editedAt` to message rows (`read`, `thread`, `mentions`, `inbox`, `since`) when a person edited the message. `search` rows have none, because Slack's search results do not carry it. Text output prints `(edited HH:MM)` next to the time. Slack gives no edit time for a bot that rewrites its own message.
 - `since` returns messages edited inside the window, not only those posted in it. It reads conversations from `--lookback` (default `6h`) before the window to find them, and reads a busy thread past its first 200 replies.
 

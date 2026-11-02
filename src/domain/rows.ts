@@ -62,7 +62,7 @@ const authorOf = (message: SlackMessage, people: PeopleIndex): string => {
 
 export const historyRows = (
   messages: ReadonlyArray<SlackMessage>,
-  context: { readonly people: PeopleIndex; readonly channelId: string; readonly workspace: string }
+  context: { readonly people: PeopleIndex; readonly channelId: string; readonly linkHost: string }
 ): ReadonlyArray<MessageRow> =>
   [...messages]
     .sort((left, right) => Number(left.ts) - Number(right.ts))
@@ -70,7 +70,7 @@ export const historyRows = (
       author: authorOf(message, context.people),
       message: readableMessage(message, context.people),
       at: slackTsToIso(message.ts),
-      url: permalink(context.workspace, context.channelId, message.ts),
+      url: permalink(context.linkHost, context.channelId, message.ts, message.thread_ts),
       replies: message.reply_count,
       files: fileRows(message.files),
       editedAt: editedAt(message),
@@ -251,7 +251,7 @@ export const mentionRows = (
   context: {
     readonly people: PeopleIndex;
     readonly channels: ReadonlyMap<string, string>;
-    readonly workspace: string;
+    readonly linkHost: string;
   }
 ): ReadonlyArray<MentionRow> =>
   targets.map((target) => {
@@ -270,7 +270,7 @@ export const mentionRows = (
             ? readableSlackText(target.text, context.people)
             : NO_TEXT,
       at: slackTsToIso(target.ts),
-      url: permalink(context.workspace, target.channel, target.ts, target.threadTs),
+      url: permalink(context.linkHost, target.channel, target.ts, target.threadTs),
       files: fileRows(target.files),
       editedAt: target.editedTs === undefined ? undefined : slackTsToIso(target.editedTs),
     };

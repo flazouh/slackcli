@@ -52,10 +52,22 @@ test("a channel link without a thread is not silently treated as a thread", () =
   expect(Result.isFailure(parseThreadTarget("#project-alpha"))).toBe(true);
 });
 
-test("permalinks drop the dot from the timestamp", () => {
-  expect(permalink("T00000001", "C00000001", "1700000000.000001")).toBe(
-    "https://app.slack.com/client/T00000001/C00000001/p1700000000000001"
+test("permalinks use the workspace's archives link Slack opens, with the dot dropped from the timestamp", () => {
+  expect(permalink("acme.slack.com", "C00000001", "1700000000.000001")).toBe(
+    "https://acme.slack.com/archives/C00000001/p1700000000000001"
   );
+});
+
+test("a reply's permalink carries its thread root and channel, like Slack's Copy link", () => {
+  expect(permalink("acme.slack.com", "C00000001", "1700000001.000001", "1700000000.000001")).toBe(
+    "https://acme.slack.com/archives/C00000001/p1700000001000001?thread_ts=1700000000.000001&cid=C00000001"
+  );
+});
+
+test("a reply's permalink this tool prints opens its thread when pasted back", () => {
+  const url = permalink("acme.slack.com", "C00000001", "1700000001.000001", "1700000000.000001");
+
+  expect(parsed(url)).toEqual({ channel: "C00000001", threadTs: "1700000000.000001" });
 });
 
 test("parses the in-app link of a focused message", () => {
@@ -66,7 +78,7 @@ test("parses the in-app link of a focused message", () => {
 });
 
 test("a permalink this tool prints can be pasted back into it", () => {
-  const url = permalink("T00000001", "C00000001", "1700000004.000004");
+  const url = permalink("acme.slack.com", "C00000001", "1700000004.000004");
 
   expect(parsed(url)).toEqual({ channel: "C00000001", threadTs: "1700000004.000004" });
 });
