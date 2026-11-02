@@ -223,26 +223,40 @@ test("an HTML error page fails as an invalid response", async () => {
   });
 });
 
-test("the workspace ref comes from the session without asking Slack", async () => {
-  const { result, sent } = await run((api) => api.workspaceRef, []);
+test("the link host comes from the session's workspace host without asking Slack", async () => {
+  const { result, sent } = await run((api) => api.linkHost, []);
 
-  expect(result._tag === "Success" ? result.success : undefined).toBe("E1");
+  expect(result._tag === "Success" ? result.success : undefined).toBe("acme.slack.com");
   expect(sent).toHaveLength(0);
 });
 
-test("a session with no ids resolves the ref once and reuses it", async () => {
+test("a session on the bare API host resolves the workspace host once and reuses it", async () => {
   const { result, sent } = await run(
-    (api) => Effect.all([api.workspaceRef, api.workspaceRef]),
-    [{ ok: true, user_id: "U5", team_id: "T5", enterprise_id: "E5" }],
+    (api) => Effect.all([api.linkHost, api.linkHost]),
+    [{ ok: true, user_id: "U5", team_id: "T5", enterprise_id: "E5", url: "https://acme.slack.com/" }],
     SlackSession.make({
       host: "slack.com",
       auth: { kind: "bearer", token: Redacted.make("xoxp-personal") },
     })
   );
 
-  expect(result._tag === "Success" ? result.success : undefined).toEqual(["E5", "E5"]);
+  expect(result._tag === "Success" ? result.success : undefined).toEqual(["acme.slack.com", "acme.slack.com"]);
   expect(sent).toHaveLength(1);
   expect(sent[0]?.url).toBe("https://slack.com/api/auth.test");
+});
+
+test("a session on app.slack.com asks Slack for the workspace host, since app.slack.com opens no message", async () => {
+  const { result, sent } = await run(
+    (api) => api.linkHost,
+    [{ ok: true, user_id: "U5", team_id: "T5", url: "https://acme.slack.com/" }],
+    SlackSession.make({
+      host: "app.slack.com",
+      auth: { kind: "bearer", token: Redacted.make("xoxp-personal") },
+    })
+  );
+
+  expect(result._tag === "Success" ? result.success : undefined).toBe("acme.slack.com");
+  expect(sent).toHaveLength(1);
 });
 
 test("missing credentials stay a credential error with a login action", async () => {

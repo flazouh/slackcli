@@ -22,7 +22,7 @@ const routedApi = (route: (method: string, params: Params) => unknown) => {
       if (body === undefined) return Effect.die(`Unexpected call to ${request.method}`);
       return request.decode(body).pipe(Effect.orDie);
     },
-    workspaceRef: Effect.succeed("E1"),
+    linkHost: Effect.succeed("acme.slack.com"),
     session: Effect.die("the Slack service must not read credentials directly"),
     download: () => Effect.die("since must not download files"),
   });
@@ -169,7 +169,7 @@ test("each since row links its thread and carries its files", async () => {
   const view = await runSince(routedApi(workspace), SINCE);
   const adam = view.rows.find((row) => row.author === "Adam");
 
-  expect(adam?.thread).toBe("https://app.slack.com/client/E1/C1/p1791291000000100");
+  expect(adam?.thread).toBe("https://acme.slack.com/archives/C1/p1791291000000100");
   expect(adam?.files.map((file) => file.id)).toEqual(["F1"]);
 });
 

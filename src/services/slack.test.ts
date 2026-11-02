@@ -35,7 +35,7 @@ const stubApi = (
       if (body === undefined) return Effect.die(`Unexpected call to ${request.method}`);
       return request.decode(body).pipe(Effect.orDie);
     },
-    workspaceRef: Effect.succeed("T1"),
+    linkHost: Effect.succeed("acme.slack.com"),
     session: Effect.die("the Slack service must not read credentials directly"),
     download: (url) => {
       calls.push(`download ${url}`);
@@ -429,7 +429,7 @@ test("send resolves a channel and returns a reusable message link", async () => 
   expect(view).toEqual({
     channel: "#team",
     ts: "1700000000.000000",
-    url: "https://app.slack.com/client/T1/C1/p1700000000000000",
+    url: "https://acme.slack.com/archives/C1/p1700000000000000",
   });
 });
 

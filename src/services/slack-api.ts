@@ -12,7 +12,7 @@ import {
 } from "../domain/errors.ts";
 import type { SlackCallError } from "../domain/errors.ts";
 import { AuthTestPayload, ResponseEnvelope } from "../domain/slack-schema.ts";
-import { cookieHeader, tokenCandidates, workspaceRef } from "../domain/session.ts";
+import { cookieHeader, tokenCandidates, workspaceLinkHost } from "../domain/session.ts";
 import type { SlackSession } from "../domain/session.ts";
 import { isExpiredCredential, isWrongTokenError, preferredScope } from "../domain/token-scope.ts";
 import { SlackCredentials } from "./credentials.ts";
@@ -290,8 +290,8 @@ export class SlackApi extends Context.Service<
   {
     /** Runs one Web API method, retrying on the other token when scope is wrong. */
     readonly call: <A>(call: SlackCall<A>) => Effect.Effect<A, SlackCallError>;
-    /** The id Slack uses in `/client/<id>/…` links, resolved once per process. */
-    readonly workspaceRef: Effect.Effect<string, SlackCallError>;
+    /** The workspace host message links use (`acme.slack.com`), resolved once per process. */
+    readonly linkHost: Effect.Effect<string, SlackCallError>;
     readonly session: Effect.Effect<SlackSession, SlackCallError>;
     /** Downloads one private Slack file with the session's credentials. */
     readonly download: (url: string) => Effect.Effect<Downloaded, SlackCallError>;
@@ -323,13 +323,13 @@ export class SlackApi extends Context.Service<
         return yield* runCall(client, yield* readSession, request);
       });
 
-      const resolveWorkspaceRef = Effect.gen(function* () {
+      const resolveLinkHost = Effect.gen(function* () {
         const session = yield* readSession;
-        const known = workspaceRef(session);
+        const known = workspaceLinkHost(session);
         if (known) return known;
 
         const auth = yield* call(slackCall("auth.test", {}, AuthTestPayload));
-        return auth.enterprise_id ?? auth.team_id;
+        return auth.url === undefined ? session.host : new URL(auth.url).host;
       });
 
       const download = Effect.fn("SlackApi.download")(function* (url: string) {
@@ -340,7 +340,7 @@ export class SlackApi extends Context.Service<
         call,
         download,
         session: readSession,
-        workspaceRef: yield* Effect.cached(resolveWorkspaceRef),
+        linkHost: yield* Effect.cached(resolveLinkHost),
       };
     })
   ).pipe(Layer.provide(RateLimiter.layer.pipe(Layer.provide(RateLimiter.layerStoreMemory))));

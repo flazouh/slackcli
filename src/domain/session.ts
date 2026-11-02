@@ -45,11 +45,14 @@ export const SlackSession = Schema.Struct({
 export type SlackSession = typeof SlackSession.Type;
 
 /**
- * The id Slack puts in a `/client/<id>/…` link. On Enterprise Grid that is the
- * org id; on a single workspace it is the team id.
+ * The host in a message link (`<host>/archives/<channel>/p<ts>`): the workspace's
+ * own host. A hand-supplied credential may only know a shared host (`slack.com`,
+ * `app.slack.com`), which opens no message, so that case asks Slack.
  */
-export const workspaceRef = (session: SlackSession): string | undefined =>
-  session.orgId ?? session.workspaceId;
+const SHARED_HOSTS: ReadonlySet<string> = new Set(["slack.com", "app.slack.com"]);
+
+export const workspaceLinkHost = (session: SlackSession): string | undefined =>
+  SHARED_HOSTS.has(session.host) ? undefined : session.host;
 
 /**
  * The tokens to try for a method, best first.

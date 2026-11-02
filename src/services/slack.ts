@@ -392,12 +392,12 @@ export class Slack extends Context.Service<
         yield* users.seed(payloadUsers);
 
         const people = yield* users.names(peopleIds(messages));
-        const workspace = yield* api.workspaceRef;
+        const linkHost = yield* api.linkHost;
         const channelNames = yield* channels.names;
 
         return {
           channel: channelLabel(channelId, channelNames),
-          rows: historyRows(messages, { people, channelId, workspace }),
+          rows: historyRows(messages, { people, channelId, linkHost }),
         } satisfies ChannelView;
       });
 
@@ -476,7 +476,7 @@ export class Slack extends Context.Service<
           root === undefined ? [] : [root, ...rest.slice(Math.max(0, rest.length - limit))];
 
         const people = yield* users.names(peopleIds(kept));
-        const workspace = yield* api.workspaceRef;
+        const linkHost = yield* api.linkHost;
 
         return {
           channel: channelLabel(target.channel, yield* channels.names),
@@ -484,7 +484,7 @@ export class Slack extends Context.Service<
           hasMore: replies.has_more ?? false,
           // The reply count belongs on a channel row, where it says "there is more
           // to open". Inside the thread the reader is already looking at it.
-          rows: historyRows(kept, { people, channelId: target.channel, workspace }).map((row) => ({
+          rows: historyRows(kept, { people, channelId: target.channel, linkHost }).map((row) => ({
             ...row,
             replies: undefined,
           })),
@@ -635,13 +635,13 @@ export class Slack extends Context.Service<
 
         const people = yield* users.names(targets.flatMap(activityPeopleIds));
         const channelNames = yield* channels.names;
-        const workspace = yield* api.workspaceRef;
+        const linkHost = yield* api.linkHost;
 
         return {
           rows: mentionRows(targets, {
             people,
             channels: channelNames,
-            workspace,
+            linkHost,
           }),
         } satisfies ActivityView;
       });
@@ -664,12 +664,12 @@ export class Slack extends Context.Service<
           )
         );
 
-        const workspace = yield* api.workspaceRef;
+        const linkHost = yield* api.linkHost;
         const channelNames = yield* channels.names;
         return {
           channel: channelLabel(posted.channel, channelNames),
           ts: posted.ts,
-          url: permalink(workspace, posted.channel, posted.ts),
+          url: permalink(linkHost, posted.channel, posted.ts),
         } satisfies PostedView;
       });
 
@@ -682,12 +682,12 @@ export class Slack extends Context.Service<
           )
         );
 
-        const workspace = yield* api.workspaceRef;
+        const linkHost = yield* api.linkHost;
         const channelNames = yield* channels.names;
         return {
           channel: channelLabel(edited.channel, channelNames),
           ts: edited.ts,
-          url: permalink(workspace, edited.channel, edited.ts),
+          url: permalink(linkHost, edited.channel, edited.ts),
         } satisfies PostedView;
       });
 
@@ -806,9 +806,9 @@ export class Slack extends Context.Service<
             HistoryPayload
           )
         );
-        const workspace = yield* api.workspaceRef;
+        const linkHost = yield* api.linkHost;
         const channel = channelLabel(target.channel, yield* channels.names);
-        const url = permalink(workspace, target.channel, target.threadTs);
+        const url = permalink(linkHost, target.channel, target.threadTs);
         const room = replies.messages.find((message) => message.room !== undefined)?.room;
         const isHuddle =
           room !== undefined ||
@@ -1037,7 +1037,7 @@ export class Slack extends Context.Service<
         const kept = ordered.slice(Math.max(0, ordered.length - limit));
 
         const people = yield* users.names(kept.flatMap((entry) => peopleIds([entry.message])));
-        const workspace = yield* api.workspaceRef;
+        const linkHost = yield* api.linkHost;
         const channelNames = yield* channels.names;
 
         return {
@@ -1047,8 +1047,8 @@ export class Slack extends Context.Service<
           rows: kept.map(({ channel, root, message }) => ({
             channel: channelLabel(channel, channelNames),
             channelId: channel,
-            thread: permalink(workspace, channel, root),
-            url: permalink(workspace, channel, message.ts, root),
+            thread: permalink(linkHost, channel, root),
+            url: permalink(linkHost, channel, message.ts, root),
             author:
               (message.user === undefined ? undefined : people.get(message.user)) ??
               message.username ??

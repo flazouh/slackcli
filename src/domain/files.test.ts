@@ -3,7 +3,7 @@ import { expect, test } from "bun:test";
 import { fileRows } from "./files.ts";
 import { historyRows, mentionRows, searchRows } from "./rows.ts";
 
-const context = { people: new Map<string, string>(), channelId: "C00000001", workspace: "T00000001" };
+const context = { people: new Map<string, string>(), channelId: "C00000001", linkHost: "acme.slack.com" };
 
 const screenshot = {
   id: "F00000001",
@@ -92,7 +92,7 @@ test("search rows and mention rows carry files too", () => {
         bot: false,
       },
     ],
-    { people: new Map(), channels: new Map(), workspace: "T1" }
+    { people: new Map(), channels: new Map(), linkHost: "acme.slack.com" }
   );
 
   expect(match?.files.map((file) => file.id)).toEqual(["F00000001"]);
