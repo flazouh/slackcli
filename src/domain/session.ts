@@ -46,11 +46,13 @@ export type SlackSession = typeof SlackSession.Type;
 
 /**
  * The host in a message link (`<host>/archives/<channel>/p<ts>`): the workspace's
- * own host. A hand-supplied credential may only know the bare API host
- * `slack.com`, which opens no message, so that case asks Slack.
+ * own host. A hand-supplied credential may only know a shared host (`slack.com`,
+ * `app.slack.com`), which opens no message, so that case asks Slack.
  */
+const SHARED_HOSTS: ReadonlySet<string> = new Set(["slack.com", "app.slack.com"]);
+
 export const workspaceLinkHost = (session: SlackSession): string | undefined =>
-  session.host === "slack.com" ? undefined : session.host;
+  SHARED_HOSTS.has(session.host) ? undefined : session.host;
 
 /**
  * The tokens to try for a method, best first.

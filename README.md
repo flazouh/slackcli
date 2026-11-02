@@ -8,11 +8,11 @@ browser.
 ```console
 $ slackcli inbox -n 3
 ● 22:15         Review Bot    checks passed
-   Thread reply (2 unread) in #project-alpha  https://app.slack.com/client/E00000001/C00000001/p1700000101000000?thread_ts=1700000100.000000
+   Thread reply (2 unread) in #project-alpha  https://acme.slack.com/archives/C00000001/p1700000101000000?thread_ts=1700000100.000000&cid=C00000001
   22:14         Example User  can you review this?
-   Direct message in DM  https://app.slack.com/client/E00000001/D00000001/p1700000040000000
+   Direct message in DM  https://acme.slack.com/archives/D00000001/p1700000040000000
   22:13         Second User   deployment complete
-   Reacted :white_check_mark: in #team-updates  https://app.slack.com/client/E00000001/C00000002/p1700000000000000
+   Reacted :white_check_mark: in #team-updates  https://acme.slack.com/archives/C00000002/p1700000000000000
 ```
 
 Most channel reads and searches use one primary API call. Channel names and

@@ -245,6 +245,20 @@ test("a session on the bare API host resolves the workspace host once and reuses
   expect(sent[0]?.url).toBe("https://slack.com/api/auth.test");
 });
 
+test("a session on app.slack.com asks Slack for the workspace host, since app.slack.com opens no message", async () => {
+  const { result, sent } = await run(
+    (api) => api.linkHost,
+    [{ ok: true, user_id: "U5", team_id: "T5", url: "https://acme.slack.com/" }],
+    SlackSession.make({
+      host: "app.slack.com",
+      auth: { kind: "bearer", token: Redacted.make("xoxp-personal") },
+    })
+  );
+
+  expect(result._tag === "Success" ? result.success : undefined).toBe("acme.slack.com");
+  expect(sent).toHaveLength(1);
+});
+
 test("missing credentials stay a credential error with a login action", async () => {
   const stub = recorder([]);
   const credentials = Layer.succeed(SlackCredentials)({
