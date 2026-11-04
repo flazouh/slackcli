@@ -384,3 +384,19 @@ test("keeps the URL of a link inside rich text blocks", () => {
     "read the setup guide (https://example.com/docs/setup) and https://github.com/example-org/repo/blob/main/a/b/SKILL.md"
   );
 });
+
+test("prints a link once when its label differs from the URL only by www, a trailing slash or the scheme", () => {
+  expect(searchMessage("<https://example.com/|example.com> <https://www.example.com/a|example.com/a> <http://example.com/b|https://example.com/b>")).toBe(
+    "https://example.com/ https://www.example.com/a http://example.com/b"
+  );
+});
+
+test("keeps the URL of a link written with an uppercase scheme", () => {
+  expect(searchMessage("<HTTPS://example.com/a|the guide>")).toBe("the guide (HTTPS://example.com/a)");
+});
+
+test("keeps a label with an ellipsis that is not a shortened URL", () => {
+  expect(searchMessage("<https://docs.example.com/x|docs…> and <https://a.com|…>")).toBe(
+    "docs… (https://docs.example.com/x) and … (https://a.com)"
+  );
+});

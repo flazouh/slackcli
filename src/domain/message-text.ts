@@ -31,13 +31,22 @@ export const mentionedIds = (message: TextBearing): ReadonlyArray<string> => {
   return text === "" ? [] : [...text.matchAll(MENTION)].flatMap((match) => match[1] ?? []);
 };
 
-const WEB_URL = /^https?:\/\//;
+const WEB_URL = /^https?:\/\//i;
 const ELLIPSIS = "…";
 
-/** Slack shortens a long pasted URL into a label like `github.com/org/repo/blob/…/SKILL.md`. */
+/** The URL as a person would type it: no scheme, no `www.`, no trailing slash. */
+const bareForm = (link: string): string =>
+  link.replace(WEB_URL, "").replace(/^www\./i, "").replace(/\/$/, "");
+
+/**
+ * Slack shortens a long pasted URL into a label like `github.com/org/repo/blob/…/SKILL.md`:
+ * the host and the start of the path, an ellipsis, then the end of the path.
+ */
 const isShortenedFrom = (label: string, bareUrl: string): boolean => {
   const cut = label.indexOf(ELLIPSIS);
-  return cut !== -1 && bareUrl.startsWith(label.slice(0, cut)) && bareUrl.endsWith(label.slice(cut + ELLIPSIS.length));
+  if (cut === -1) return false;
+  const head = label.slice(0, cut);
+  return head.includes("/") && bareUrl.startsWith(head) && bareUrl.endsWith(label.slice(cut + ELLIPSIS.length));
 };
 
 /**
@@ -49,8 +58,8 @@ const isShortenedFrom = (label: string, bareUrl: string): boolean => {
 export const linkText = (url: string, label: string): string => {
   if (label === "") return url;
   if (!WEB_URL.test(url)) return label;
-  const bareUrl = url.replace(WEB_URL, "");
-  if (label === url || label === bareUrl || isShortenedFrom(label, bareUrl)) return url;
+  const bareUrl = bareForm(url);
+  if (bareForm(label) === bareUrl || isShortenedFrom(bareForm(label), bareUrl)) return url;
   return `${label} (${url})`;
 };
 
