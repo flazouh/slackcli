@@ -10,7 +10,7 @@ import {
 
 const people = (entries: Record<string, string>) => new Map(Object.entries(entries));
 
-test("renders search matches with resolved mentions and stripped links", () => {
+test("renders search matches with resolved mentions and keeps a labelled link's URL", () => {
   expect(
     searchRows(
       [
@@ -28,7 +28,7 @@ test("renders search matches with resolved mentions and stripped links", () => {
     {
       channel: "#project-alpha",
       author: "sample-user",
-      message: "@Example User read the setup guide",
+      message: "@Example User read the setup guide (https://example.com/docs/setup)",
       at: "2023-11-14T22:13:20.123Z",
       url: "https://workspace.invalid/archives/C00000001/p1700000000123456",
       files: [],
@@ -205,7 +205,7 @@ test("renders activity items with human labels, channel names and cleaned text",
       unread: true,
       channel: "#general",
       author: "First User",
-      message: "@channel Welcome @Second User here",
+      message: "@channel Welcome @Second User here (https://example.com)",
       at: "2023-11-14T22:13:31.000Z",
       url: "https://acme.slack.com/archives/C00000001/p1700000011000001",
       files: [],
@@ -328,4 +328,59 @@ test("a direct message bundle keeps the text it already carries", () => {
 
 test("an activity type this version does not model is skipped", () => {
   expect(activityTargets([{ item: { type: "channel" } }])).toEqual([]);
+});
+
+const searchMessage = (text: string): string | undefined =>
+  searchRows([{ ts: "1700000000.123456", username: "sample-user", channel: { name: "project-alpha" }, text }], { people: new Map() })[0]
+    ?.message;
+
+test("prints the full URL when Slack shortened it into the link label", () => {
+  expect(
+    searchMessage(
+      "run this skill\n<https://github.com/example-org/example-skills/blob/main/.claude/skills/4layer/SKILL.md|github.com/example-org/example-skills/blob/…/SKILL.md>"
+    )
+  ).toBe("run this skill\nhttps://github.com/example-org/example-skills/blob/main/.claude/skills/4layer/SKILL.md");
+});
+
+test("prints a link once when its label is the URL without the scheme", () => {
+  expect(searchMessage("see <https://example.com/docs|example.com/docs>")).toBe("see https://example.com/docs");
+});
+
+test("keeps channel and mailto labels as Slack shows them", () => {
+  expect(searchMessage("ask in <#C00000001|general> or <mailto:help@example.com|help@example.com>")).toBe(
+    "ask in general or help@example.com"
+  );
+});
+
+test("keeps the URL of a link inside rich text blocks", () => {
+  const [row] = searchRows(
+    [
+      {
+        ts: "1700000000.123456",
+        username: "sample-user",
+        channel: { name: "project-alpha" },
+        blocks: [
+          {
+            type: "rich_text",
+            elements: [
+              {
+                type: "rich_text_section",
+                elements: [
+                  { type: "text", text: "read " },
+                  { type: "link", url: "https://example.com/docs/setup", text: "the setup guide" },
+                  { type: "text", text: " and " },
+                  { type: "link", url: "https://github.com/example-org/repo/blob/main/a/b/SKILL.md", text: "github.com/example-org/repo/blob/…/SKILL.md" },
+                ],
+              },
+            ],
+          },
+        ],
+      },
+    ],
+    { people: new Map() }
+  );
+
+  expect(row?.message).toBe(
+    "read the setup guide (https://example.com/docs/setup) and https://github.com/example-org/repo/blob/main/a/b/SKILL.md"
+  );
 });

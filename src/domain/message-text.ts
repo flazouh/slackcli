@@ -31,9 +31,32 @@ export const mentionedIds = (message: TextBearing): ReadonlyArray<string> => {
   return text === "" ? [] : [...text.matchAll(MENTION)].flatMap((match) => match[1] ?? []);
 };
 
+const WEB_URL = /^https?:\/\//;
+const ELLIPSIS = "…";
+
+/** Slack shortens a long pasted URL into a label like `github.com/org/repo/blob/…/SKILL.md`. */
+const isShortenedFrom = (label: string, bareUrl: string): boolean => {
+  const cut = label.indexOf(ELLIPSIS);
+  return cut !== -1 && bareUrl.startsWith(label.slice(0, cut)) && bareUrl.endsWith(label.slice(cut + ELLIPSIS.length));
+};
+
+/**
+ * A web link keeps its URL, because the label alone can hide where it goes. A
+ * label that is the URL, or Slack's shortened copy of it, gives way to the full
+ * URL; any other label is kept and the URL follows it. Channel and mailto links
+ * keep only the label, which already names the target.
+ */
+export const linkText = (url: string, label: string): string => {
+  if (label === "") return url;
+  if (!WEB_URL.test(url)) return label;
+  const bareUrl = url.replace(WEB_URL, "");
+  if (label === url || label === bareUrl || isShortenedFrom(label, bareUrl)) return url;
+  return `${label} (${url})`;
+};
+
 /**
  * Slack's own mrkdwn, turned into something a terminal reader can scan:
- * `<@U123>` becomes a display name, `<url|label>` keeps only the label.
+ * `<@U123>` becomes a display name, `<url|label>` becomes `linkText`.
  */
 export const readableSlackText = (text: string, people: PeopleIndex): string =>
   text
@@ -44,7 +67,7 @@ export const readableSlackText = (text: string, people: PeopleIndex): string =>
       // person the lookup missed reads as if the message named nobody.
       return known === undefined ? whole : `@${known}`;
     })
-    .replace(/<[^>|]+\|([^>]+)>/g, "$1")
+    .replace(/<([^>|]+)\|([^>]+)>/g, (_whole, url: string, label: string) => linkText(url, label))
     .replace(/<([^>]+)>/g, "$1")
     // Slack escapes user-typed angle brackets and ampersands, so decode them
     // only after the markup above has been parsed.
@@ -115,7 +138,7 @@ const objectText = (node: RichTextObject): string => {
   if (node.type === "text") return styled(blockText(node.text ?? null, ""), node.style);
   if (node.type === "link") {
     const label = blockText(node.text ?? null, "");
-    return label === "" ? node.url ?? "" : label;
+    return node.url === undefined ? label : linkText(node.url, label);
   }
 
   const inner = node.type !== undefined && INLINE_CONTAINERS.has(node.type) ? "" : "\n";
