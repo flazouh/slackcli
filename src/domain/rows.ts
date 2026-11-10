@@ -84,7 +84,7 @@ export const searchRows = (
     channel: `#${match.channel?.name ?? "unknown"}`,
     author:
       match.username ??
-      (match.user === undefined ? "unknown" : context.people.get(match.user) ?? match.user),
+      (match.user == null ? "unknown" : context.people.get(match.user) ?? match.user),
     message: readableMessage(match, context.people),
     at: slackTsToIso(match.ts),
     url: match.permalink,
