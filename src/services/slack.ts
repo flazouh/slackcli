@@ -442,7 +442,7 @@ export class Slack extends Context.Service<
         const { total, matches } = yield* searchMatches(query, limit);
         const people = yield* users.names(
           matches.flatMap((match) => [
-            ...(match.user === undefined ? [] : [match.user]),
+            ...(match.user == null ? [] : [match.user]),
             ...mentionedIds(match),
           ])
         );

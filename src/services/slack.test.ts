@@ -329,6 +329,32 @@ test("search uses the users returned with the result without another call", asyn
   expect(api.calls).toEqual(["search.messages"]);
 });
 
+test("search keeps a match whose user Slack sends as null", async () => {
+  const api = stubApi({
+    "search.messages": [
+      {
+        ok: true,
+        messages: {
+          total: 1,
+          matches: [
+            {
+              ts: "1.000000",
+              user: null,
+              username: "workflow",
+              channel: { id: "C1", name: "team" },
+              text: "from a workflow",
+            },
+          ],
+        },
+      },
+    ],
+  });
+
+  const view = await run((slack) => slack.search("workflow", 20), api);
+
+  expect(view.rows[0]).toMatchObject({ author: "workflow", message: "from a workflow" });
+});
+
 test("thread marks a partial Slack page as an incomplete total", async () => {
   const api = stubApi({
     "conversations.replies": [

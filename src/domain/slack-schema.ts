@@ -216,7 +216,7 @@ export const ConversationViewPayload = Schema.Struct({
 export const SearchMatch = Schema.Struct({
   ts: Schema.String,
   text: Schema.optionalKey(Schema.String),
-  user: Schema.optionalKey(Schema.String),
+  user: Schema.optionalKey(Schema.NullOr(Schema.String)),
   username: Schema.optionalKey(Schema.String),
   permalink: Schema.optionalKey(Schema.String),
   channel: Schema.optionalKey(
